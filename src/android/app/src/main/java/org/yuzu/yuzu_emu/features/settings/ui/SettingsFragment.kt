@@ -144,6 +144,17 @@ class SettingsFragment : Fragment() {
             }
         }
 
+        settingsViewModel.shouldShowDualMappingDialog.collect(
+            viewLifecycleOwner,
+            resetState = { settingsViewModel.setShouldShowDualMappingDialog(false) }
+        ) {
+            if (it) {
+                DualControllerMapping.show(requireActivity(), getPlayerIndex()) {
+                    settingsViewModel.setReloadListAndNotifyDataset(true)
+                }
+            }
+        }
+
         settingsViewModel.shouldShowPathPicker.collect(
             viewLifecycleOwner,
             resetState = { settingsViewModel.setShouldShowPathPicker(false) }

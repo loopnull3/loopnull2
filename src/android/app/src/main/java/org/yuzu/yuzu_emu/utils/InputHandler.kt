@@ -128,23 +128,25 @@ object InputHandler {
 
     fun getDevices(): Map<Int, YuzuPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, YuzuPhysicalDevice>()
-        val deviceIds = InputDevice.getDeviceIds()
         var port = 0
         val inputSettings = NativeConfig.getInputSettings(true)
-        deviceIds.forEach { deviceId ->
-            InputDevice.getDevice(deviceId)?.apply {
-                if (isPhysicalGameController(this)) {
-                    if (!gameControllerDeviceIds.contains(controllerNumber)) {
-                        gameControllerDeviceIds[controllerNumber] = YuzuPhysicalDevice(
-                            this,
-                            port,
-                            inputSettings[port].useSystemVibrator
-                        )
-                    }
-                    port++
+        // Ports follow the controllers themselves, not the order they connected in: mappings
+        // name a controller by its port, and a pair of Joy-Cons (two controllers to Android)
+        // must keep theirs whichever of the two reconnects first.
+        InputDevice.getDeviceIds().toList()
+            .mapNotNull { InputDevice.getDevice(it) }
+            .filter { isPhysicalGameController(it) }
+            .sortedWith(compareBy({ it.vendorId }, { it.productId }, { it.descriptor }))
+            .forEach { device ->
+                if (!gameControllerDeviceIds.contains(device.controllerNumber)) {
+                    gameControllerDeviceIds[device.controllerNumber] = YuzuPhysicalDevice(
+                        device,
+                        port,
+                        inputSettings[port].useSystemVibrator
+                    )
                 }
+                port++
             }
-        }
         return gameControllerDeviceIds
     }
 

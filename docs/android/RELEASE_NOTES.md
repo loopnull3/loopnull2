@@ -27,6 +27,10 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **Build all shaders now (Hokkaido engine)** in Game properties: the emulator's shader precache
   on Android. The game's compute shaders are found in its files once; each start then builds
   them, and the graphics pipelines saved from earlier play, on the loading screen.
+- **Auto-map two Joy-Cons** (Settings › Controls › a player): the left half of a player's
+  controls from one controller and the right half from another, for a pair of Joy-Cons, which
+  Android lists as two controllers. Controller ports no longer depend on the order the
+  controllers connected in.
 - Korean translation of everything LoopNative shows.
 
 ## LoopNative Pack (Banana Native v0.3.45, modified)

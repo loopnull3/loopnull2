@@ -909,6 +909,16 @@ class SettingsFragmentPresenter(
                 )
             )
 
+            add(
+                RunnableSetting(
+                    titleId = R.string.auto_map_dual,
+                    descriptionId = R.string.auto_map_dual_description,
+                    isRunnable = true
+                ) {
+                    settingsViewModel.setShouldShowDualMappingDialog(true)
+                }
+            )
+
             val mappingFilterSetting = object : AbstractIntSetting {
                 override val key = "mapping_filter"
 

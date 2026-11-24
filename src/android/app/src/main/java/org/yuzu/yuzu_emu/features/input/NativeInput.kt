@@ -279,6 +279,33 @@ object NativeInput {
         displayName: String
     ) = updateMappingsWithDefaultImpl(playerIndex, deviceParams.serialize(), displayName)
 
+    /**
+     * Maps one player from two devices held as a pair (two Joy-Cons): [left] gives the left stick,
+     * L, ZL, Minus and the direction buttons, [right] gives A, B, X, Y, the right stick, R, ZR and
+     * Plus. Clears the player's other mappings.
+     */
+    fun updateMappingsWithDualDevices(
+        playerIndex: Int,
+        left: ParamPackage,
+        right: ParamPackage,
+        leftName: String,
+        rightName: String
+    ) = updateMappingsWithDualDevicesImpl(
+        playerIndex,
+        left.serialize(),
+        right.serialize(),
+        leftName,
+        rightName
+    )
+
+    private external fun updateMappingsWithDualDevicesImpl(
+        playerIndex: Int,
+        leftParams: String,
+        rightParams: String,
+        leftName: String,
+        rightName: String
+    )
+
     private external fun updateMappingsWithDefaultImpl(
         playerIndex: Int,
         deviceParams: String,

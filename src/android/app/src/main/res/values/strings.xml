@@ -746,6 +746,13 @@
     <string name="auto_map">Auto-map a controller</string>
     <string name="auto_map_description">Select a device to attempt auto-mapping</string>
     <string name="attempted_auto_map">Attempted auto-map with %1$s</string>
+    <string name="auto_map_dual">Auto-map two Joy-Cons</string>
+    <string name="auto_map_dual_description">A pair of Joy-Cons is two controllers to Android. Pick the one in your left hand, then the one in your right: this player gets the left stick, L, ZL, Minus and the direction buttons from the first, and A, B, X, Y, the right stick, R, ZR and Plus from the second. Works with any two controllers.</string>
+    <string name="auto_map_dual_left">Left hand: which controller?</string>
+    <string name="auto_map_dual_right">Right hand: which controller?</string>
+    <string name="auto_map_dual_need_two">Two controllers must be connected. Pair both Joy-Cons in the phone\'s Bluetooth settings, press a button on each, then try again.</string>
+    <string name="auto_map_dual_same">Pick two different controllers.</string>
+    <string name="auto_map_dual_done">Left half from %1$s, right half from %2$s</string>
     <string name="controller_type">Controller type</string>
     <string name="pro_controller">Pro Controller</string>
     <string name="handheld">Handheld</string>

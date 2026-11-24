@@ -138,6 +138,18 @@ very phone. LoopNative's S26 profile:
 "Without lag" is the goal, not a promise: shader builds the first time a scene appears, scene
 loads and, for the largest games, memory coming back from storage can still stutter.
 
+## Two Joy-Cons as one controller
+
+A pair of Joy-Cons connected over Bluetooth is two controllers to Android, and **Auto-map a
+controller** takes one. Settings › Controls › a player › **Auto-map two Joy-Cons** asks for the
+controller in your left hand, then the one in your right, and gives the player the left half of
+the controls from the first and the right half from the second. It works with any two
+controllers, and each button can still be remapped by hand afterwards.
+
+Controller ports now follow the controllers themselves rather than the order they connected in,
+so the pair keeps its mapping whichever Joy-Con reconnects first. If you used several controllers
+before, auto-map them once more.
+
 ## Reporting problems
 
 Include your phone model, Android version and GPU driver, the game, the engine, the LoopNative

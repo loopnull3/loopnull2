@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <string>
+#include <type_traits>
+
 #include <common/fs/fs.h>
 #include <common/fs/path_util.h>
 #include <common/settings.h>
@@ -516,6 +520,101 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_updateMappingsWithDefaul
             controller->SetStickParam(index, named_mapping);
         });
     }
+}
+
+/// One player's controls from two devices held as a pair (two Joy-Cons, which Android lists as
+/// two controllers): the left device gives the left half, the right device the right half. Each
+/// half is the device's own default mapping, with what a lone Joy-Con reports differently made
+/// up for:
+/// - a Joy-Con's stick may be its X/Y axes whichever side it is: the other stick's axes stand in;
+/// - the left Joy-Con's direction buttons reach the app by scan code only (InputHandler), so the
+///   device does not list them: they are mapped all the same;
+/// - a lone Joy-Con's SL and SR are its other shoulder pair (hid-nintendo).
+void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_updateMappingsWithDualDevicesImpl(
+    JNIEnv* env, jobject j_obj, jint j_player_index, jstring j_left_params, jstring j_right_params,
+    jstring j_left_name, jstring j_right_name) {
+    namespace NativeButton = Settings::NativeButton;
+    namespace NativeAnalog = Settings::NativeAnalog;
+    auto& input_subsystem = EmulationSession::GetInstance().GetInputSubsystem();
+
+    const Common::ParamPackage left(Common::Android::GetJString(env, j_left_params));
+    const Common::ParamPackage right(Common::Android::GetJString(env, j_right_params));
+    const auto left_name = Common::Android::GetJString(env, j_left_name);
+    const auto right_name = Common::Android::GetJString(env, j_right_name);
+    auto left_buttons = input_subsystem.GetButtonMappingForDevice(left);
+    auto right_buttons = input_subsystem.GetButtonMappingForDevice(right);
+    auto left_analogs = input_subsystem.GetAnalogMappingForDevice(left);
+    auto right_analogs = input_subsystem.GetAnalogMappingForDevice(right);
+
+    std::array<Common::ParamPackage, NativeButton::NumButtons> buttons{};
+    std::array<Common::ParamPackage, NativeAnalog::NumAnalogs> sticks{};
+    const auto take = [](auto& from, int from_id, auto& to, int to_id, const std::string& name) {
+        using Key = typename std::decay_t<decltype(from)>::key_type;
+        const auto it = from.find(static_cast<Key>(from_id));
+        if (it == from.end() || !it->second.Has("engine")) {
+            return false;
+        }
+        to[static_cast<size_t>(to_id)] = it->second;
+        to[static_cast<size_t>(to_id)].Set("display", name);
+        return true;
+    };
+    const auto button_of = [](const Common::ParamPackage& device, int keycode,
+                              const std::string& name) {
+        Common::ParamPackage param;
+        param.Set("engine", device.Get("engine", "android"));
+        param.Set("port", device.Get("port", 0));
+        param.Set("guid", device.Get("guid", ""));
+        param.Set("button", keycode);
+        param.Set("display", name);
+        return param;
+    };
+
+    // The left half
+    for (const int id : {NativeButton::LStick, NativeButton::L, NativeButton::ZL,
+                         NativeButton::Minus, NativeButton::DUp, NativeButton::DDown,
+                         NativeButton::DLeft, NativeButton::DRight}) {
+        take(left_buttons, id, buttons, id, left_name);
+    }
+    constexpr int KEYCODE_DPAD_UP = 19;
+    for (int i = 0; i < 4; ++i) {
+        // DUp, DDown, DLeft, DRight beside KEYCODE_DPAD_UP, _DOWN, _LEFT, _RIGHT
+        constexpr std::array dpad{NativeButton::DUp, NativeButton::DDown, NativeButton::DLeft,
+                                  NativeButton::DRight};
+        auto& param = buttons[static_cast<size_t>(dpad[static_cast<size_t>(i)])];
+        if (!param.Has("engine") && left.Has("guid")) {
+            param = button_of(left, KEYCODE_DPAD_UP + i, left_name);
+        }
+    }
+    if (!take(left_analogs, NativeAnalog::LStick, sticks, NativeAnalog::LStick, left_name)) {
+        take(left_analogs, NativeAnalog::RStick, sticks, NativeAnalog::LStick, left_name);
+    }
+    take(left_buttons, NativeButton::R, buttons, NativeButton::SLLeft, left_name);
+    take(left_buttons, NativeButton::ZR, buttons, NativeButton::SRLeft, left_name);
+
+    // The right half
+    for (const int id : {NativeButton::A, NativeButton::B, NativeButton::X, NativeButton::Y,
+                         NativeButton::RStick, NativeButton::R, NativeButton::ZR,
+                         NativeButton::Plus}) {
+        take(right_buttons, id, buttons, id, right_name);
+    }
+    if (!take(right_analogs, NativeAnalog::RStick, sticks, NativeAnalog::RStick, right_name)) {
+        take(right_analogs, NativeAnalog::LStick, sticks, NativeAnalog::RStick, right_name);
+    }
+    if (!buttons[NativeButton::RStick].Has("engine")) {
+        // Its stick's click may be the left stick's button when it reports the left stick's axes
+        take(right_buttons, NativeButton::LStick, buttons, NativeButton::RStick, right_name);
+    }
+    take(right_buttons, NativeButton::L, buttons, NativeButton::SLRight, right_name);
+    take(right_buttons, NativeButton::ZL, buttons, NativeButton::SRRight, right_name);
+
+    ApplyControllerConfig(j_player_index, [&](Core::HID::EmulatedController* controller) {
+        for (int id = 0; id < NativeButton::NumButtons; ++id) {
+            controller->SetButtonParam(static_cast<size_t>(id), buttons[static_cast<size_t>(id)]);
+        }
+        for (int id = 0; id < NativeAnalog::NumAnalogs; ++id) {
+            controller->SetStickParam(static_cast<size_t>(id), sticks[static_cast<size_t>(id)]);
+        }
+    });
 }
 
 jstring Java_org_yuzu_yuzu_1emu_features_input_NativeInput_getButtonParamImpl(JNIEnv* env,

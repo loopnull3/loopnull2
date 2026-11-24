@@ -57,6 +57,9 @@ class SettingsViewModel : ViewModel() {
     private val _shouldShowResetInputDialog = MutableStateFlow(false)
     val shouldShowResetInputDialog = _shouldShowResetInputDialog.asStateFlow()
 
+    private val _shouldShowDualMappingDialog = MutableStateFlow(false)
+    val shouldShowDualMappingDialog = _shouldShowDualMappingDialog.asStateFlow()
+
     private val _shouldRecreateForLanguageChange = MutableStateFlow(false)
     val shouldRecreateForLanguageChange = _shouldRecreateForLanguageChange.asStateFlow()
 
@@ -116,6 +119,10 @@ class SettingsViewModel : ViewModel() {
 
     fun setShouldShowResetInputDialog(value: Boolean) {
         _shouldShowResetInputDialog.value = value
+    }
+
+    fun setShouldShowDualMappingDialog(value: Boolean) {
+        _shouldShowDualMappingDialog.value = value
     }
 
     fun setShouldRecreateForLanguageChange(value: Boolean) {
