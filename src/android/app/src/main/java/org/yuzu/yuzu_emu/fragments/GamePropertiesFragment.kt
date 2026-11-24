@@ -48,6 +48,7 @@ import org.yuzu.yuzu_emu.model.TaskState
 import org.yuzu.yuzu_emu.utils.DirectoryInitialization
 import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.GameEngine
+import org.yuzu.yuzu_emu.utils.ShaderPrecache
 import org.yuzu.yuzu_emu.utils.GameHelper
 import org.yuzu.yuzu_emu.utils.GameIconUtils
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
@@ -393,6 +394,30 @@ class GamePropertiesFragment : Fragment() {
                         )
                     )
                 }
+                add(
+                    SubmenuProperty(
+                        R.string.shader_precache,
+                        R.string.shader_precache_description,
+                        R.drawable.ic_build,
+                        details = {
+                            getString(
+                                if (ShaderPrecache.exists(args.game.programId)) {
+                                    R.string.shader_precache_built
+                                } else {
+                                    R.string.shader_precache_not_built
+                                }
+                            )
+                        },
+                        action = {
+                            val navController = binding.root.findNavController()
+                            GameEngine.buildEmulatorShaders(requireActivity(), args.game) {
+                                navController.navigate(
+                                    HomeNavigationDirections.actionGlobalEmulationActivity(args.game, true)
+                                )
+                            }
+                        }
+                    )
+                )
                 add(
                     SubmenuProperty(
                         R.string.loopnative_report,

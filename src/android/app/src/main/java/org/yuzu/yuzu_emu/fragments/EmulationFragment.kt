@@ -94,6 +94,7 @@ import org.yuzu.yuzu_emu.utils.GameIconUtils
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
 import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.Log
+import org.yuzu.yuzu_emu.utils.ShaderPrecache
 import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
 import org.yuzu.yuzu_emu.utils.NativeConfig
 import org.yuzu.yuzu_emu.utils.NativeFreedrenoConfig
@@ -366,6 +367,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }
 
         startLoopNative()
+        ShaderPrecache.beforeStart(game)
 
         emulationState = EmulationState(game!!.path) {
             return@EmulationState driverViewModel.isInteractionAllowed.value &&
@@ -398,6 +400,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         loopNativeGovernor = null
         if (activity?.isFinishing != false) {
             LoopNativeSession.end()
+            ShaderPrecache.afterStop()
         }
         super.onDestroy()
     }

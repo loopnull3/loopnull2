@@ -236,6 +236,21 @@ object GameEngine {
         pack?.setOption(context, titleIdOf(game), option.id, on)
     }
 
+    /**
+     * Game properties › Build all shaders now, for the emulator engines: builds the game's shader
+     * precache, then offers to play it on the engine it would start on (not offered when that is
+     * the pack engine, whose shaders are its own).
+     */
+    fun buildEmulatorShaders(activity: FragmentActivity, game: Game, emulate: () -> Unit) {
+        val onLoopNative: () -> Unit = { LoopNativeLauncher.launch(activity, game, emulate) }
+        val play: (() -> Unit)? = when (effective(activity, game)) {
+            Choice.PACK -> null
+            Choice.NATIVE -> onLoopNative
+            else -> emulate
+        }
+        ShaderPrecache.show(activity, game, play)
+    }
+
     /** Prepares the game again and shows LoopNative's report; [emulate] is offered after. */
     fun showNativeReport(activity: FragmentActivity, game: Game, emulate: () -> Unit) =
         LoopNativeLauncher.showReport(activity, game, emulate)

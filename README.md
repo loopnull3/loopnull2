@@ -53,6 +53,12 @@ Requirements: an arm64 phone with Android 13 or newer and Vulkan 1.3.
   motion (FSR 3 frame generation, off by default). **LoopNative report** runs Prepare again.
 - **LoopNative Pack options:** full vegetation, RAM saver, RAM saver: Strong, soft textures;
   **Import a Banana Native pack**; **Build all shaders now**.
+- **Build all shaders now (Hokkaido engine):** for the Hokkaido and LoopNative engines. Reads the
+  game's files once and finds its compute shaders; each start then builds them, and the graphics
+  pipelines saved from earlier play, on the loading screen instead of while you play, and again
+  only when the GPU driver changes. It is the emulator's shader precache, which upstream has in
+  its desktop app only. Graphics pipelines the game has never drawn can't be built ahead: the
+  emulator learns them from the game's draws. **Clear shader cache** removes it.
 
 ### What LoopNative changes in Banana Native
 

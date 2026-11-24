@@ -24,6 +24,9 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **Upscaling by GPU maker:** AMD FSR on Xclipse, Qualcomm SGSR on Adreno, whenever LoopNative
   renders below 1x.
 - **Smooth motion (optional):** FSR 3 frame generation per game.
+- **Build all shaders now (Hokkaido engine)** in Game properties: the emulator's shader precache
+  on Android. The game's compute shaders are found in its files once; each start then builds
+  them, and the graphics pipelines saved from earlier play, on the loading screen.
 - Korean translation of everything LoopNative shows.
 
 ## LoopNative Pack (Banana Native v0.3.45, modified)
