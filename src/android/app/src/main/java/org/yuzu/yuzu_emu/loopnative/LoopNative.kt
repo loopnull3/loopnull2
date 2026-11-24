@@ -79,6 +79,13 @@ object LoopNative {
 
     fun titleIdOf(game: Game): String = game.programIdHex.uppercase().padStart(16, '0')
 
+    /** The phone's RAM as Android reports it (MemTotal), in GiB. */
+    fun totalRamGib(context: Context): Double {
+        val memory = ActivityManager.MemoryInfo()
+        context.getSystemService(ActivityManager::class.java)?.getMemoryInfo(memory)
+        return memory.totalMem / (1024.0 * 1024.0 * 1024.0)
+    }
+
     /** Tells the native side about the phone, once per process (the GPU name needs the driver). */
     fun ensureDevice(context: Context) {
         if (deviceReady) {
@@ -141,6 +148,27 @@ object LoopNative {
             storageBackedMemory = root.getBoolean("storage_backed_memory"),
             startFpsLimit = root.getInt("start_fps_limit"),
             overrides = overrides
+        )
+    }
+
+    /** The phone as LoopNative classifies it (LoopNativeJni.deviceTuning). */
+    data class Device(
+        val deviceClass: String,
+        val ramTier: String,
+        val recommendTurnip: Boolean,
+        val recommendRadv: Boolean
+    ) {
+        val isS26Exynos get() = deviceClass == "galaxy_s26_exynos"
+    }
+
+    fun device(context: Context): Device {
+        ensureDevice(context)
+        val root = JSONObject(LoopNativeJni.deviceTuning())
+        return Device(
+            deviceClass = root.getString("device_class"),
+            ramTier = root.getString("ram_tier"),
+            recommendTurnip = root.getBoolean("recommend_turnip"),
+            recommendRadv = root.getBoolean("recommend_radv")
         )
     }
 

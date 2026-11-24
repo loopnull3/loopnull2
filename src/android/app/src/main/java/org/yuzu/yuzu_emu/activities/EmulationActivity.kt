@@ -269,8 +269,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
     /**
      * A shortcut starts a game here with only its file (no game argument). A game whose engine is
-     * LoopNative goes to the home screen instead, which prepares and starts it through its engine
-     * (MainActivity).
+     * LoopNative or LoopNative Pack goes to the home screen instead, which prepares and starts it
+     * through its engine (MainActivity).
      */
     private fun handOffToEngine(): Boolean {
         if (intent.action != Intent.ACTION_VIEW ||
@@ -286,7 +286,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                 else -> null
             }
         }.getOrNull() ?: return false
-        if (!GameEngine.usesNative(this, game)) {
+        if (!GameEngine.usesLauncher(this, game)) {
             return false
         }
         handedOff = true

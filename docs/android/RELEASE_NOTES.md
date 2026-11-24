@@ -1,7 +1,7 @@
 # LoopNative 0.1.0
 
-The first LoopNative build: Hokkaido android-0.7.1 with Banana Native removed and the LoopNative
-engine in its place, tuned for the Galaxy Z Flip5 (Snapdragon 8 Gen 2, Adreno 740, 8 GB) and
+The first LoopNative build: Hokkaido android-0.7.1 with the LoopNative engine added and Banana
+Native modified into LoopNative Pack, tuned for the Galaxy Z Flip5 (Snapdragon 8 Gen 2, Adreno 740, 8 GB) and
 the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 
 **Not yet tested on a Flip5 or an S26.** See [LOOPNATIVE.md](../../LOOPNATIVE.md) for the honest status.
@@ -26,9 +26,16 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **Smooth motion (optional):** FSR 3 frame generation per game.
 - Korean translation of everything LoopNative shows.
 
-## Removed
+## LoopNative Pack (Banana Native v0.3.45, modified)
 
-- Banana Native: its module, its downloaded libraries, its screens and its scripts.
+- The engine that rebuilds a game's files: Prepare rewrites its code and translates its shaders
+  into a pack, then runs the code natively with NVN on Vulkan.
+- **8 GB class** (Galaxy Z Flip5): RAM saver: Strong, less vegetation, memory pools placed in
+  256 MiB parts and a 1280x720 render from a game's first start.
+- **Auto by phone:** the pack only where the profile's required RAM fits and, on Xclipse, a RADV
+  driver is installed; Ocarina of Time on the Galaxy S26 with RADV.
+- Game properties › **LoopNative Pack options**, **Import a Banana Native pack**, **Build all
+  shaders now**.
 
 ## App
 

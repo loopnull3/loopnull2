@@ -1,0 +1,773 @@
+// SPDX-FileCopyrightText: Copyright 2026 Hokkaido contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package dev.nxnative.android;
+
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.Message;
+import android.os.Messenger;
+import android.os.RemoteException;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * Hokkaido runs Banana Native as an engine behind its own UI: what a game needs before it plays, preparing it
+ * (PackService's job, as Ondevice starts it), its progress, and starting it (GameActivity, as FrontendLaunch does).
+ * Banana Native's own screens stay out of the player's way. Its checks and job code are used as they are, so a
+ * sync of upstream/ brings their changes; keep this in step with FrontendLaunch.ready and Ondevice.Panel.
+ */
+public final class HokkaidoBridge {
+    private HokkaidoBridge() {}
+
+    /**
+     * NxApp.onCreate's work: Hokkaido's application runs it in every process. Not NxApp.applyTheme: it sets the night
+     * mode of the whole app, Hokkaido's screens too.
+     */
+    public static void install(Context context) {
+        android.app.Application app = (android.app.Application) context.getApplicationContext();
+        NxApp.app = app;   // Tx reads Banana Native's strings through it
+        Words.source = new Words.Source() {
+            @Override public String string(String key) {
+                int id = app.getResources().getIdentifier(key, "string", app.getPackageName());
+                return id == 0 ? null : app.getResources().getString(id);
+            }
+            @Override public String plural(String key, int count) {
+                int id = app.getResources().getIdentifier(key, "plurals", app.getPackageName());
+                return id == 0 ? null : app.getResources().getQuantityText(id, count).toString();
+            }
+        };
+        PickedNup.install(context);
+        ShaderLibs.appFiles = app.getExternalFilesDir(null);
+        Readiness.minSdk = BuildConfig.NX_MIN_SDK;
+        UpdateCheck.android12 = BuildConfig.NX_MIN_SDK < 33;
+        DumpCheck.workOverride = (dump, titleId) -> workFolder(app, dump, titleId);
+    }
+
+    /**
+     * Prepare's work folder for a dump: &lt;dump&gt;/../&lt;title ID&gt;-hokkaido-work. Banana Native's own app keeps its job in
+     * &lt;title ID&gt;-work beside the same dump; sharing it, each app resumed or overwrote the other's job, whose pack is in
+     * the other app's storage. An unfinished Prepare of this app in &lt;title ID&gt;-work (Hokkaido 0.7.0) goes on there.
+     */
+    static File workFolder(Context c, File dump, String titleId) {
+        File parent = dump.getAbsoluteFile().getParentFile();
+        File base = parent != null ? parent : dump;
+        File ours = new File(base, titleId + "-hokkaido-work"), shared = new File(base, titleId + "-work");
+        if (!ours.exists()) {
+            File jf = Job.fileOf(shared);
+            if (jf.isFile()) {
+                try {
+                    Job j = Job.read(jf);
+                    if (!"done".equals(j.state()) && SaveStore.inside(j.pack(), AppStorage.packs(c))) return shared;
+                } catch (IOException e) {
+                    // not a job of this app
+                }
+            }
+        }
+        return ours;
+    }
+
+    /**
+     * Banana Native's status for a game (its profile's readiness.tsv status row: "playable", "bring-up"), or
+     * null when this Banana Native has no profile for it and cannot run it.
+     */
+    public static String status(String titleId) {
+        Profile p = Profile.of(titleId == null ? "" : titleId.toUpperCase(Locale.ROOT));
+        return p == null ? null : p.status;
+    }
+
+    /** The RAM in GiB the game's profile calls required, 0 when it names none or has no profile. */
+    public static double requiredRamGib(String titleId) {
+        Profile p = Profile.of(titleId == null ? "" : titleId.toUpperCase(Locale.ROOT));
+        return p == null ? 0 : LoopNativeTuning.requiredRamGib(p.reqs);
+    }
+
+    /** Embedded, Banana Native never updates itself: Hokkaido's releases carry it (Updater.sources). */
+    static boolean embedded() {
+        return true;
+    }
+
+    /** What a game needs before it plays in Banana Native. */
+    public static final class Plan {
+        public static final int READY = 0, PREPARE = 1, RESUME = 2, RUNNING = 3, PROBLEM = 4;
+
+        public final int kind;
+        public final String title;
+        public final String message;
+        public final String detail;
+        /** A build Banana Native does not list: preparing it anyway is possible (PrepareText.ANYWAY_WARNING). */
+        public final boolean canTryAnyway;
+
+        final String dump;
+        final Game game;
+        final DumpCheck.Result result;
+        final Job job;
+        final File packDir;
+        final boolean code, shaders;
+
+        Plan(int kind, String title, String message, String detail, boolean canTryAnyway, String dump, Game game,
+             DumpCheck.Result result, Job job, File packDir, boolean code, boolean shaders) {
+            this.kind = kind;
+            this.title = title;
+            this.message = message;
+            this.detail = detail == null ? "" : detail;
+            this.canTryAnyway = canTryAnyway;
+            this.dump = dump;
+            this.game = game;
+            this.result = result;
+            this.job = job;
+            this.packDir = packDir;
+            this.code = code;
+            this.shaders = shaders;
+        }
+
+        /** The ready game's title ID (READY), else empty. */
+        public String titleId() {
+            return game != null ? game.titleId : "";
+        }
+
+        static Plan problem(String title, String message, String detail) {
+            return new Plan(PROBLEM, title, message, detail, false, null, null, null, null, null, false, false);
+        }
+    }
+
+    /** The plan for a game folder or file. Reads files: call it off the main thread. */
+    public static Plan plan(Context c, String dumpPath, boolean tryAnyway) {
+        File dump = new File(Frontend.normal(dumpPath));
+        if (!dump.exists()) return Plan.problem("Game not found", dump + " is not there.", null);
+        if (!dump.canRead()) return Plan.problem("Cannot read the game", dump + " cannot be read. Check that All files access is on.", null);
+
+        String id;
+        try {
+            id = Pack.playableIdOf(dump);
+        } catch (IOException e) {
+            return Plan.problem("Cannot read the game", e.getMessage(), null);
+        }
+        String missing = Profile.missing(id, "This game");
+        if (missing != null) return Plan.problem("Not supported by Banana Native", missing, null);
+
+        Game ready = ready(c, dump, id, tryAnyway);
+        if (ready != null) return new Plan(Plan.READY, ready.name, "", null, false, dump.getPath(), ready, null, null, null, false, false);
+        // A finished pack of a build this app has not tested (made with Try anyway) starts after a warning, as MainActivity's Play anyway:
+        // preparing it again only makes the same pack
+        if (!tryAnyway) {
+            Found f = found(c, dump, id);
+            BuildCheck.Result b = f == null ? null : untested(c, f.pack, dump);
+            if (b != null) {
+                Profile p = Profile.of(id);
+                String warning = b.kind == BuildCheck.Kind.UNSUPPORTED ? PrepareText.UNSUPPORTED_WARNING() : PrepareText.ANYWAY_WARNING();
+                return new Plan(Plan.PROBLEM, "Untested version" + (p != null ? " of " + p.name : ""), b.message + "\n\n" + warning, b.detail,
+                                true, dump.getPath(), null, null, null, null, false, false);
+            }
+        }
+
+        // A job for this dump: running, or one to resume (Ondevice.Panel.checked).
+        File existing = null;
+        boolean any = tryAnyway;
+        try {
+            File jf = Job.fileOf(DumpCheck.workOf(dump, Pack.titleIdOf(dump)));
+            if (jf.isFile()) {
+                existing = jf;
+                try { any |= Job.read(jf).tryAnyway(); } catch (IOException e) { /* another format: a new job replaces it */ }
+            }
+        } catch (IOException e) {
+            // DumpCheck says what is wrong
+        }
+        DumpCheck.Result r = DumpCheck.check(dump, existing == null, any);
+        if (!r.ok()) {
+            Profile p = Profile.of(id);
+            String title = r.otherBuild ? "Untested version" + (p != null ? " of " + p.name : "") : "Cannot prepare this game";
+            String message = r.otherBuild ? r.error + "\n\n" + PrepareText.ANYWAY_WARNING() : r.error;
+            return new Plan(Plan.PROBLEM, title, message, r.detail, r.otherBuild, dump.getPath(), null, null, null, null, false, false);
+        }
+        Profile prof = Profile.of(r.titleId);
+        String name = prof != null ? prof.name : r.titleId;
+        if (existing != null) {
+            try {
+                Job j = Job.read(existing);
+                String s = j.state();
+                boolean same = j.dump().getPath().equals(r.dump.getPath()) && j.version() == r.version;
+                if (same && "running".equals(s) && PackServiceWatch.alive(c)) {
+                    return new Plan(Plan.RUNNING, name, j.statusText(true), null, false, dump.getPath(), null, r, j, null, false, false);
+                }
+                if (same && (s.equals("running") || s.equals("paused") || s.equals("failed") || s.equals("pending"))) {
+                    return new Plan(Plan.RESUME, name, j.statusText(false) + "\n\nIt goes on from where it stopped.", j.errorDetail(),
+                                    false, dump.getPath(), null, r, j, null, false, false);
+                }
+            } catch (IOException e) {
+                // a damaged job.json: a new job replaces it
+            }
+        }
+
+        // A pack that is already there: what fits is kept (Ondevice.Panel.checked).
+        File packDir = Folders.packFor(c, r.dump, r.titleId);
+        try {
+            Pack p = packDir == null ? null : Pack.read(packDir);
+            if (p != null && !p.simulated && p.titleId.equals(r.titleId)) {
+                String build = PackCheck.blocking(c, p, r.dump);
+                String library = PackCheck.shaders(packDir, r.titleId);
+                boolean code = build != null;
+                // A game the shader layer covers with no library at all: the code only; its shaders are built while it plays (Ondevice.Panel.checked)
+                boolean covered = ShaderLibs.layerCovers(r.titleId, Prefs.layerEnv(c, r.titleId));
+                boolean shaders = library != null && !(covered && code && Pack.libraryOf(packDir) == null);
+                String what = code && shaders
+                        ? "Rewrites the game's code (a few minutes) and " + Ondevice.shadersText(packDir, r.titleId)
+                        : code ? "Rewrites the game's code (a few minutes, in the background)." : Ondevice.shadersText(packDir, r.titleId);
+                String why = (build != null ? build + "\n\n" : "") + (library != null ? library : "");
+                if (!code && !shaders) what = "Its pack fits: nothing needs preparing.";
+                return new Plan(Plan.PREPARE, name, what, why.trim(), false, dump.getPath(), null, r, null, packDir, code, shaders);
+            }
+        } catch (IOException e) {
+            // no usable pack: the whole job
+        }
+        // A game the shader layer covers is prepared without shaders: it plays once its code is done and builds its shaders while it runs (Ondevice.Panel.checked)
+        boolean covered = ShaderLibs.layerCovers(r.titleId, Prefs.layerEnv(c, r.titleId));
+        int total = prof != null ? prof.shaderTotal : 0;
+        String head = (r.version == 0 ? "Base game" : "Update " + r.version) + (r.untested ? " (untested version)" : "") + ", " + r.dlc + " DLC.\n\n";
+        String space = String.format(Locale.getDefault(), "\n\nNeeds about 1.5 GB of free space (%.1f GB free now).", r.free / 1073741824.0);
+        String text = covered ? head + PrepareText.codeOnlyText(ShaderLibs.minutesText(total)) + space
+                : head + String.format(Locale.getDefault(), "Banana Native makes the game's pack from your dump: it rewrites the game's code (a few minutes) and translates %,d shaders (%s in the background, best on the charger). You can pause any time.", total, ShaderLibs.jobMinutesText(total)) + space;
+        String where = "Game: " + r.dump + "\nWorking files: " + r.work + "\nPack: " + AppStorage.pack(c, r.titleId);
+        return new Plan(Plan.PREPARE, name, text, where, false, dump.getPath(), null, r, null, null, true, !covered);
+    }
+
+    /**
+     * The plan that translates every shader of a prepared game now, its code kept (Job.adopt with the shaders; the job a game the shader layer covers
+     * leaves to the player): its scenes no longer draw late or wrongly while their shaders are built. The layer stays on for shaders the set lacks.
+     * Reads files: call it off the main thread.
+     */
+    public static Plan shadersPlan(Context c, String dumpPath) {
+        File dump = new File(Frontend.normal(dumpPath));
+        String id;
+        try {
+            id = Pack.playableIdOf(dump);
+        } catch (IOException e) {
+            return Plan.problem("Cannot read the game", e.getMessage(), null);
+        }
+        Profile prof = Profile.of(id);
+        if (prof == null) return Plan.problem("Not supported by Banana Native", Profile.missing(id, "This game"), null);
+        boolean any = false;
+        try {
+            File jf = Job.fileOf(DumpCheck.workOf(dump, Pack.titleIdOf(dump)));
+            if (jf.isFile()) {
+                Job j = Job.read(jf);
+                any = j.tryAnyway();
+                if ("running".equals(j.state()) && PackServiceWatch.alive(c)) {
+                    return new Plan(Plan.RUNNING, prof.name, j.statusText(true), null, false, dump.getPath(), null, null, j, null, false, false);
+                }
+            }
+        } catch (IOException e) {
+            // no job of this format: the new one replaces it
+        }
+        DumpCheck.Result r = DumpCheck.check(dump, false, any);
+        if (!r.ok()) return Plan.problem("Cannot prepare this game", r.error, r.detail);
+        File packDir = Folders.packFor(c, r.dump, r.titleId);
+        Pack p = null;
+        try {
+            p = packDir == null ? null : Pack.read(packDir);
+        } catch (IOException e) {
+            // no pack: the game is prepared first
+        }
+        if (p == null || p.simulated || !p.titleId.equals(r.titleId)) {
+            return Plan.problem(prof.name, "Start the game once on Banana Native first: its code is prepared then.", null);
+        }
+        String text = "Translates all of the game's shaders now, so new scenes no longer show up white or with parts missing while their shaders are built. "
+                + "It takes a while and uses the CPU hard: best on the charger. Shaders the set lacks are still built while you play.";
+        return new Plan(Plan.PREPARE, prof.name, text, null, false, dump.getPath(), null, r, null, packDir, false, true);
+    }
+
+    /**
+     * Starts preparing: a new job, one that redoes what an existing pack lacks, or the stopped job resumed. False
+     * when nothing needed redoing (a pack that fits is adopted at once): plan again, it is ready.
+     */
+    public static boolean prepare(Context c, Plan plan) throws Exception {
+        Job j;
+        if (plan.kind == Plan.RESUME || plan.kind == Plan.RUNNING) {
+            j = plan.job;
+        } else if (plan.kind == Plan.PREPARE && plan.packDir != null) {
+            j = Job.adopt(plan.result, plan.packDir, plan.code, plan.shaders);
+            j.save();
+            if (!plan.code && !plan.shaders) {
+                Job.remember(c, j.file);
+                addGame(c, j);
+                return false;
+            }
+        } else if (plan.kind == Plan.PREPARE) {
+            j = Job.create(plan.result, AppStorage.pack(c, plan.result.titleId), !plan.shaders);   // (code only: its shaders are built while it plays)
+            j.save();
+        } else {
+            throw new IllegalStateException("nothing to prepare");
+        }
+        Job.remember(c, j.file);
+        c.startForegroundService(new Intent(c, PackService.class).setAction(PackService.ACTION_START)
+                .putExtra(PackService.EXTRA_JOB, j.file.getPath()));
+        return true;
+    }
+
+    /** Pauses the job that runs now (PackService.ACTION_PAUSE). */
+    public static void pause(Context c) {
+        c.startService(new Intent(c, PackService.class).setAction(PackService.ACTION_PAUSE).putExtra(PackService.EXTRA_FROM, "hokkaido"));
+    }
+
+    /**
+     * Before a ready game starts: Hokkaido's driver for it (a driver zip, installed into Banana Native's own
+     * gpu_drivers/ when it is new or changed; empty: the system's) and Hokkaido's save folder for it, which both
+     * engines then use. A save Banana Native kept in its own folder moves in once, when Hokkaido's is still empty
+     * (it stays where it was too). Reads and writes files: call it off the main thread.
+     */
+    public static void prepareStart(Context c, Plan plan, String driverZip, String saveDir, String window) throws IOException {
+        String id = plan.game.titleId;
+        // The render size Hokkaido's resolution scale gives (Game resolution: a "<width>x<height>" or "original"),
+        // when it changed since the last start: a size picked in the game's quick settings stays until then.
+        String given = "hokkaido_window_" + id;
+        window = LoopNativeTuning.window(LoopNativeTuning.memTotal(c), window);   // an 8 GB phone: 1280x720 at most
+        if (window != null && !window.isEmpty() && !window.equals(Prefs.of(c).getString(given, null))) {
+            Prefs.gameWindow(c, id, window);
+            Prefs.of(c).edit().putString(given, window).commit();
+        }
+        startingSettings(c, id);
+        LoopNativeTuning.apply(c, id);
+        String driverName = null;
+        if (driverZip == null || driverZip.isEmpty()) {
+            GpuDriver.choice(c, id, GpuDriver.SYSTEM);
+        } else {
+            driverName = installedDriver(c, new File(driverZip)).dir.getName();
+            GpuDriver.choice(c, id, driverName);
+        }
+        meshThroughCompute(c, id, driverName);
+        if (saveDir == null || saveDir.isEmpty()) return;
+        File shared = new File(saveDir);
+        if (!shared.isDirectory() && !shared.mkdirs()) throw new IOException("cannot create the save folder " + shared);
+        // Only the first time the game uses Hokkaido's folder: later an empty one is a deleted save, never refilled.
+        File own = AppStorage.save(c, id);
+        boolean first = Prefs.folder(c, "save_" + id) == null;
+        if (first && isEmpty(shared) && !own.getAbsoluteFile().equals(shared.getAbsoluteFile()) && !isEmpty(own)) copyTree(own, shared);
+        Prefs.folder(c, "save_" + id, shared.getPath());
+    }
+
+    /** The starting settings' version (startingSettings): raised when they change, so a game takes the new ones once. */
+    private static final int STARTING_SETTINGS = 2;
+    private static final String OCARINA_OF_TIME = "0400486024DEC000";
+
+    /**
+     * Hokkaido's starting settings for a game, among Banana Native's Game settings that Hokkaido does not show: set once
+     * (again when STARTING_SETTINGS rises), so a change in the game's quick settings stays. Ocarina of Time, from the
+     * Galaxy S26 (RADV, 12 GB): the RAM saver's file-backed texture pools left holes in the terrain, so it is off; Hold
+     * 60 fps keeps the frame rate from jumping between 30 and 20 fps, which the phone's GPU clock cap followed; and the
+     * lower vegetation detail Banana Native recommends.
+     */
+    private static void startingSettings(Context c, String id) {
+        String key = "hokkaido_settings_" + id;
+        int had = Prefs.of(c).getInt(key, 0);
+        if (had >= STARTING_SETTINGS) return;
+        if (id.equals(OCARINA_OF_TIME)) {
+            if (had < 1) {
+                Prefs.ramSaver(c, id, false);
+                Prefs.hold60(c, id, true);
+                Prefs.fullVegetation(c, id, false);
+            }
+            // A phone of 12 GB or less: soft textures and pools placed by parts (its Advanced rows), as
+            // Hokkaido's own build of Banana Native has them in the game's profile
+            if (had < 2 && Prefs.lowRam(c)) {
+                AdvancedSettings.set(c, "DM_VK_TEX_SOFT", id, "1");
+                AdvancedSettings.set(c, "DM_VK_PLACE_PART_MB", id, "256");
+            }
+        }
+        Prefs.of(c).edit().putInt(key, STARTING_SETTINGS).commit();
+    }
+
+    /**
+     * Mesh draws through compute (the game's Advanced row DM_VK_MESH=0) while it runs on a RADV driver on Samsung's
+     * Xclipse GPU (an Exynos phone): there Ocarina of Time's task and mesh draws ran for seconds a frame and then hung
+     * the GPU (Galaxy S26). Back to Auto when the driver changes. Hokkaido's own build of Banana Native makes it the
+     * default for that driver too.
+     */
+    private static void meshThroughCompute(Context c, String id, String driverName) {
+        boolean radvXclipse = "Samsung".equalsIgnoreCase(android.os.Build.SOC_MANUFACTURER)
+                && driverName != null && driverName.toLowerCase(Locale.ROOT).contains("radv");
+        String mark = "hokkaido_mesh_" + id;
+        if (radvXclipse) {
+            AdvancedSettings.set(c, "DM_VK_MESH", id, "0");
+            Prefs.of(c).edit().putBoolean(mark, true).commit();
+        } else if (Prefs.of(c).getBoolean(mark, false)) {
+            AdvancedSettings.set(c, "DM_VK_MESH", id, null);
+            Prefs.of(c).edit().remove(mark).commit();
+        }
+    }
+
+    /** The driver unpacked from a zip, unpacked again only when the zip changed since (by its size and time). */
+    private static GpuDriver.Info installedDriver(Context c, File zip) throws IOException {
+        if (!zip.isFile()) throw new IOException("The GPU driver " + zip + " is not there: pick another one in Hokkaido.");
+        String key = "hokkaido_driver_" + zip.getPath(), stamp = zip.length() + ":" + zip.lastModified();
+        String known = Prefs.of(c).getString(key, "");
+        if (known.startsWith(stamp + ":")) {
+            String name = known.substring(stamp.length() + 1);
+            for (GpuDriver.Info i : GpuDriver.installed(c)) if (i.dir.getName().equals(name)) return i;
+        }
+        GpuDriver.Info i = GpuDriver.install(c, zip);
+        Prefs.of(c).edit().putString(key, stamp + ":" + i.dir.getName()).commit();
+        return i;
+    }
+
+    private static boolean isEmpty(File dir) {
+        String[] l = dir.list();
+        return l == null || l.length == 0;
+    }
+
+    private static void copyTree(File from, File to) throws IOException {
+        File[] l = from.listFiles();
+        if (l == null) return;
+        if (!to.isDirectory() && !to.mkdirs()) throw new IOException("cannot create " + to);
+        for (File f : l) {
+            File t = new File(to, f.getName());
+            if (f.isDirectory()) {
+                copyTree(f, t);
+            } else {
+                java.nio.file.Files.copy(f.toPath(), t.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+
+    /**
+     * The game Banana Native's game process still holds ({title ID, name}), or null. Each game has a host of its own
+     * and the process holds one: a game left without Stop the game keeps it, and another game's start is refused
+     * there ("is running, stop it first").
+     */
+    public static String[] runningGame(Context c) {
+        if (gameProcess(c) == null) return null;
+        String title = null, name = null;
+        try {
+            for (String line : java.nio.file.Files.readAllLines(ExitWatch.record(c).toPath())) {
+                if (line.startsWith("title=")) title = line.substring(6);
+                else if (line.startsWith("name=")) name = line.substring(5);
+            }
+        } catch (IOException e) {
+            // no record: an unknown game
+        }
+        return new String[] {title == null ? "" : title, name == null ? "" : name};
+    }
+
+    /** Closes Banana Native's game process when it holds this game (its save is about to change under it). */
+    public static void closeGame(Context c, String titleId) {
+        String[] running = runningGame(c);
+        if (running != null && running[0].equalsIgnoreCase(titleId)) stopRunningGame(c);
+    }
+
+    /** Closes Banana Native's game process (what a game there has not saved is lost); waits up to 3 s for it to go. */
+    public static void stopRunningGame(Context c) {
+        Integer pid = gameProcess(c);
+        if (pid == null) return;
+        android.os.Process.killProcess(pid);
+        for (int i = 0; i < 30 && gameProcess(c) != null; i++) {
+            try { Thread.sleep(100); } catch (InterruptedException e) { return; }
+        }
+    }
+
+    private static Integer gameProcess(Context c) {
+        android.app.ActivityManager am = (android.app.ActivityManager) c.getSystemService(Context.ACTIVITY_SERVICE);
+        List<android.app.ActivityManager.RunningAppProcessInfo> ps = am == null ? null : am.getRunningAppProcesses();
+        if (ps != null) for (android.app.ActivityManager.RunningAppProcessInfo p : ps) if (p.processName.endsWith(":game")) return p.pid;
+        return null;
+    }
+
+    /**
+     * The game options Banana Native shows on its own Game settings page, for Hokkaido's Game properties. They take
+     * effect at the game's next start. Soft textures is the game's Advanced row DM_VK_TEX_SOFT.
+     */
+    public static final int OPTION_FULL_VEGETATION = 0, OPTION_RAM_SAVER = 1, OPTION_SOFT_TEXTURES = 2, OPTION_RAM_SAVER_STRONG = 3;
+
+    /** Whether the game has the option: full vegetation only where its profile has a vegetation detail */
+    public static boolean hasOption(String titleId, int option) {
+        Profile p = Profile.of(titleId);
+        return p != null && (option != OPTION_FULL_VEGETATION || p.vegetationDetail);
+    }
+
+    public static boolean option(Context c, String titleId, int option) {
+        switch (option) {
+            case OPTION_FULL_VEGETATION: return Prefs.fullVegetation(c, titleId);
+            case OPTION_RAM_SAVER: return Prefs.ramSaver(c, titleId);
+            case OPTION_RAM_SAVER_STRONG: return Prefs.ramSaverStrong(c, titleId);
+            default: return "1".equals(AdvancedSettings.effective(c, "DM_VK_TEX_SOFT", titleId));
+        }
+    }
+
+    public static void setOption(Context c, String titleId, int option, boolean on) {
+        switch (option) {
+            case OPTION_FULL_VEGETATION: Prefs.fullVegetation(c, titleId, on); break;
+            // Strong includes the RAM saver, as on Banana Native's Game settings page
+            case OPTION_RAM_SAVER: Prefs.ramSaver(c, titleId, on); if (!on) Prefs.ramSaverStrong(c, titleId, false); break;
+            case OPTION_RAM_SAVER_STRONG: Prefs.ramSaverStrong(c, titleId, on); if (on) Prefs.ramSaver(c, titleId, true); break;
+            default: AdvancedSettings.set(c, "DM_VK_TEX_SOFT", titleId, on ? "1" : "0");
+        }
+    }
+
+    /**
+     * Banana Native's Import pack (PackUi.importRun) for Hokkaido: a pack that Banana Native's own app exported (its
+     * game's Manage › Export pack…, banana-pack-&lt;title ID&gt;-&lt;version&gt;.zip) or a pack folder, checked against the game
+     * in dumpPath and put into this app's packs/&lt;title ID&gt;, which the game's next start finds first. Null when it is
+     * in, else why not; nothing changes then. Blocks for as long as the copy takes: call it off the main thread.
+     */
+    public static String importPack(Context c, File source, String titleId, String dumpPath) {
+        File packs = AppStorage.packs(c), target = AppStorage.pack(c, titleId);
+        try {
+            String[] running = runningGame(c);
+            if (running != null && running[0].equalsIgnoreCase(titleId)) {
+                throw new IOException("the game is running in Banana Native: close it first");
+            }
+            if (!packs.isDirectory() && !packs.mkdirs()) throw new IOException("cannot create " + packs);
+            long need = source.length();
+            if (packs.getUsableSpace() < need + (256L << 20)) {
+                throw new IOException("the pack needs " + SaveStore.size(need) + ", and the phone has " + SaveStore.size(packs.getUsableSpace()) + " free");
+            }
+            File remembered = Job.remembered(c);
+            if (remembered != null && remembered.isFile()) {
+                Job j = Job.read(remembered);
+                if (SaveStore.same(j.pack(), target) && !"done".equals(j.state())) {
+                    throw new IOException("this game is being prepared: let it finish, or start it once and cancel the Prepare");
+                }
+            }
+            Pack p = PackZip.stage(source, packs, titleId);
+            try {
+                String bad = dumpPath == null ? null : PackCheck.blocking(c, p, new File(dumpPath));
+                if (bad != null) throw new IOException(bad);
+                PackZip.swapIn(p.dir, target);
+            } finally {
+                if (p.dir.exists()) SaveStore.deleteTree(p.dir);
+            }
+            Folders.pickedPack(c, titleId, null);   // a folder picked in Banana Native's own launcher would win over the import
+            return null;
+        } catch (IOException | RuntimeException e) {
+            String m = e.getMessage();
+            return m == null || m.isEmpty() ? e.toString() : m;
+        }
+    }
+
+    /** Hokkaido's theme for the game screen's menu (HokkaidoInGame.Screen): its style resources, and its dark mode. */
+    static final String EXTRA_THEMES = "hokkaido_themes", EXTRA_NIGHT = "hokkaido_night";
+
+    /**
+     * Starts a ready game (Plan.READY) in Banana Native's game process, as FrontendLaunch.play does, with Hokkaido's
+     * theme (its style resources in order, and its dark mode) for the in-game menu there. Not as a frontend's game: the
+     * game screen joins Hokkaido's own task, so its end shows Hokkaido (a frontend's would send that task back).
+     */
+    public static void play(Context c, Plan plan, int[] themes, boolean night) {
+        Game g = plan.game;
+        c.startActivity(new Intent(c, GameActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra("title_id", g.titleId).putExtra("name", g.name).putExtra("game", g.gameDir)
+                .putExtra("pack", g.packDir)
+                .putExtra(EXTRA_THEMES, themes).putExtra(EXTRA_NIGHT, night));
+    }
+
+    /** A job's progress, for Hokkaido's progress screen. */
+    public static final class Progress {
+        public final String name;
+        public final String state;
+        public final String text;
+        public final double overall;
+        public final boolean alive;
+        public final boolean ready;
+        public final String error;
+
+        Progress(Job j, boolean alive, boolean ready) {
+            this.name = j.name();
+            this.state = j.state();
+            this.text = j.statusText(alive);
+            this.overall = j.overall();
+            this.alive = alive;
+            this.ready = ready;
+            this.error = "failed".equals(j.state()) ? j.errorDetail() : "";
+        }
+    }
+
+    public interface Listener {
+        void onProgress(Progress progress);
+    }
+
+    /**
+     * Follows the remembered job: PackService's state messages while it runs (Ondevice.Panel), else job.json once a
+     * second. A finished job's game goes into Banana Native's game list (Ondevice.Panel.addGame), so it plays next time.
+     */
+    public static final class Watch implements ServiceConnection {
+        private final Context context;
+        private final Listener listener;
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private final Messenger client = new Messenger(new Handler(Looper.getMainLooper(), this::onMessage));
+        private Messenger service;
+        private boolean bound;
+        private boolean alive;
+        private boolean stopped;
+        private Job job;
+
+        public Watch(Context context, Listener listener) {
+            this.context = context.getApplicationContext();
+            this.listener = listener;
+        }
+
+        public void start() {
+            stopped = false;
+            bound = context.bindService(new Intent(context, PackService.class), this, 0);
+            tick();
+        }
+
+        public void stop() {
+            stopped = true;
+            handler.removeCallbacksAndMessages(null);
+            if (service != null) {
+                Message m = Message.obtain(null, PackService.MSG_UNREGISTER);
+                m.replyTo = client;
+                try { service.send(m); } catch (RemoteException e) { /* the service is gone */ }
+            }
+            if (bound) {
+                context.unbindService(this);
+                bound = false;
+            }
+            service = null;
+        }
+
+        private void tick() {
+            if (stopped) return;
+            if (service == null) {
+                File f = Job.remembered(context);
+                try {
+                    if (f != null && f.isFile()) job = Job.read(f);
+                } catch (IOException e) {
+                    // being renamed over: keep the last one
+                }
+                if (!bound) bound = context.bindService(new Intent(context, PackService.class), this, 0);
+                report();
+            }
+            handler.postDelayed(this::tick, 1000);
+        }
+
+        private boolean onMessage(Message m) {
+            if (m.what != PackService.MSG_STATE) return false;
+            Bundle d = m.getData();
+            Job j = Job.of(new File(d.getString("file", "")), d.getString("job", "{}"));
+            if (j != null) job = j;
+            alive = d.getBoolean("alive");
+            report();
+            return true;
+        }
+
+        private void report() {
+            if (job == null || stopped) return;
+            boolean ready = ready(job);
+            if (ready && !alive) addGame(context, job);
+            listener.onProgress(new Progress(job, alive, ready));
+        }
+
+        @Override public void onServiceConnected(ComponentName n, IBinder b) {
+            service = new Messenger(b);
+            Message m = Message.obtain(null, PackService.MSG_REGISTER);
+            m.replyTo = client;
+            try { service.send(m); } catch (RemoteException e) { service = null; }
+        }
+
+        @Override public void onServiceDisconnected(ComponentName n) {
+            service = null;
+            alive = false;
+            report();
+        }
+    }
+
+    /** Whether PackService's process runs (a job that says running without it was stopped). */
+    private static final class PackServiceWatch {
+        static boolean alive(Context c) {
+            android.app.ActivityManager am = (android.app.ActivityManager) c.getSystemService(Context.ACTIVITY_SERVICE);
+            List<android.app.ActivityManager.RunningAppProcessInfo> ps = am == null ? null : am.getRunningAppProcesses();
+            if (ps != null) for (android.app.ActivityManager.RunningAppProcessInfo p : ps) if (p.processName.endsWith(":pack")) return true;
+            return false;
+        }
+    }
+
+    /** Play needs the pack and its shader library of this APK's version (Ondevice.Panel.ready). */
+    private static boolean ready(Job j) {
+        if (!"done".equals(j.state()) || j.apkChanged()) return false;
+        try {
+            Pack p = Pack.read(j.pack());
+            return Pack.libraryProblem(j.pack(), j.titleId()) == null && p.unfinishedModule() == null && p.titleId.equals(j.titleId());
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** The finished job's game into the list with its pack (Ondevice.Panel.addGame). */
+    private static void addGame(Context c, Job j) {
+        for (Game g : Game.load(c)) {
+            if (GameList.samePath(g.gameDir, j.dump().getPath()) && GameList.samePath(g.packDir, j.pack().getPath())) return;
+        }
+        Pack p;
+        try { p = Pack.read(j.pack()); } catch (IOException e) { return; }
+        if (p.simulated) return;
+        Game g = new Game(j.titleId(), p.name.isEmpty() ? j.name() : p.name, j.dump().getPath(), j.pack().getPath());
+        Game.put(c, g);
+        String picked = Folders.pickedPack(c, g.titleId);
+        if (picked != null && !picked.equals(g.packDir)) Folders.pickedPack(c, g.titleId, g.packDir);
+    }
+
+    /** The card and pack a start of this game uses (FrontendLaunch.ready) */
+    private static final class Found {
+        final Game card;
+        final File packDir;
+        final Pack pack;
+
+        Found(Game card, File packDir, Pack pack) {
+            this.card = card;
+            this.packDir = packDir;
+            this.pack = pack;
+        }
+    }
+
+    /** This game's card (null when it has none) and the pack that fits it, null when no pack does */
+    private static Found found(Context c, File game, String id) {
+        List<Game> list = Game.load(c);
+        List<Integer> same = GameList.matches(list, id, game.getPath(), Game.key(game.getPath(), id), Game::key);
+        Game card = same.isEmpty() ? null : list.get(same.get(0));
+        File packDir = card != null ? new File(card.packDir) : Folders.packFor(c, game, id);
+        if (packDir == null) return null;
+        try {
+            Pack p = Pack.read(packDir);
+            if (!p.titleId.equalsIgnoreCase(id)) return null;
+            if (Nup.isNup(game) ? p.romfsPath(game) == null : p.romfs(game) == null) return null;
+            return new Found(card, packDir, p);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Why a finished pack starts only after a warning (MainActivity's Play anyway: a build this app does not support, or another version's RomFS), null when it
+     * starts without one or not at all
+     */
+    private static BuildCheck.Result untested(Context c, Pack p, File game) {
+        if (p.unfinishedModule() != null || PackCheck.rewriting(c, p.dir, game, p.titleId) != null) return null;
+        BuildCheck.Result b = BuildCheck.build(p, game);
+        return b.kind == BuildCheck.Kind.UNSUPPORTED || b.kind == BuildCheck.Kind.ROMFS ? b : null;
+    }
+
+    /** FrontendLaunch.ready: the game's card when it can start now, else null. anyway: an untested pack starts too (the player said Try anyway) */
+    private static Game ready(Context c, File game, String id, boolean anyway) {
+        Found f = SaveUi.busy(id) ? null : found(c, game, id);
+        if (f == null) return null;
+        if (PackCheck.blocking(c, f.pack, game) != null && !(anyway && untested(c, f.pack, game) != null)) return null;
+        // A missing or older shader library blocks only a game the shader layer does not cover (FrontendLaunch.ready), and, as on Banana
+        // Native's own Home (MainActivity), not one whose older library still plays: its shader update is optional (Build all shaders now).
+        // Without this, every new shader chain sent the game to a Prepare that translated all its shaders again.
+        if (Pack.libraryBlock(f.packDir, id, Prefs.layerEnv(c, id)) != null
+                && Pack.playableLibrary(f.packDir, id) == null && Pack.legacyLibrary(f.packDir, id) == null) return null;
+        if (f.card != null && GameList.samePath(f.card.gameDir, game.getPath())) return f.card;
+        // A card of the same title and build at another path (another copy of the dump) is moved to the dump Hokkaido starts:
+        // the game would otherwise read the other copy's files (an incomplete copy: a black screen)
+        String name = f.card != null ? f.card.name : f.pack.name.isEmpty() ? id : f.pack.name;
+        return Game.put(c, new Game(id, name, game.getPath(), f.packDir.getPath()));
+    }
+}

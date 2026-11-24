@@ -15,10 +15,10 @@ Exynos 2600** (Xclipse 960, 12 GB). It is a fork of
 [Hokkaido](https://github.com/pavelgajdo/Hokkaido) android-0.7.1, which continues yuzu, Sudachi,
 Eden, Eglantine and Lichii.
 
-Hokkaido carries two engines: its emulator and Banana Native. LoopNative removes Banana Native
-completely and puts its own engine, **LoopNative**, next to the emulator. See
-[LOOPNATIVE.md](LOOPNATIVE.md) for what it does, its honest status and the roadmap to a native
-(NVN-on-Vulkan) engine.
+Hokkaido carries two engines: its emulator and Banana Native. This fork has three: the emulator,
+**LoopNative** (the emulator tuned for the phone) and **LoopNative Pack**, which is
+[Banana Native](https://git.eden-emu.dev/moceure/BananaNative) with LoopNative's changes for these
+phones. See [LOOPNATIVE.md](LOOPNATIVE.md) for what each does and its honest status.
 
 This is an independent, experimental project, not affiliated with Nintendo, Samsung or the
 projects it builds on. Games, keys and firmware are not included: only use games and system files
@@ -32,21 +32,42 @@ saves and settings.
 
 Requirements: an arm64 phone with Android 13 or newer and Vulkan 1.3.
 
-## Two engines
+## Three engines
 
-| | Hokkaido | LoopNative |
-|---|---|---|
-| How it runs a game | The emulator core (NCE CPU, emulated GPU) with your settings | The same core, started with the phone's and the game's tuning |
-| Memory | Guest memory in RAM | Guest memory on storage when the game needs more RAM than the phone has |
-| Heat | Android's own throttling | A governor caps at 30 fps before the phone throttles, lifts it once cool |
-| First start | At once | Prepare reads the game's code once (seconds) and shows a readiness report |
+| | Hokkaido | LoopNative | LoopNative Pack |
+|---|---|---|---|
+| How it runs a game | The emulator core (NCE CPU, emulated GPU) with your settings | The same core, started with the phone's and the game's tuning | Banana Native: the game's code rewritten once and run natively, its graphics (NVN) drawn directly with Vulkan |
+| Games | Any | Any | Only the games Banana Native has a profile for |
+| Game files | Read as they are | Read as they are | Rebuilt into a **pack** (code and shaders) by Prepare |
+| First start | At once | Prepare reads the game's code (seconds) and shows a report | Prepare makes the pack: minutes for the code, longer for the shaders |
+| Memory | Guest memory in RAM | Guest memory on storage when the game needs more than the phone has | The game's memory pools are the GPU's own (no second copy); RAM saver keeps them in a file |
+| GPU driver on Xclipse | Samsung's or custom RADV | Samsung's or custom RADV | Custom RADV only (Samsung's has no placed memory maps) |
 
-- **Choosing:** Game properties › **Engine**: Auto, Hokkaido or LoopNative. Auto picks LoopNative
-  for the games it has a profile for (Ocarina of Time, Mario Kart World, Pokémon Pokopia, Fire
-  Emblem: Fortune's Weave, Donkey Kong Bananza, Star Fox) and for every game on an 8 GB phone.
-- **Options:** Game properties › **LoopNative options**: guest memory on storage, thermal
-  governor, keep my settings, smooth motion (FSR 3 frame generation, off by default).
-  **LoopNative report** runs Prepare again.
+- **Choosing:** Game properties › **Engine**: Auto, Hokkaido, LoopNative or LoopNative Pack. Auto
+  picks the pack for the games Banana Native's profiles call playable (Pokémon Pokopia, Fire
+  Emblem: Fortune's Weave, Star Fox, Donkey Kong Bananza, Mario Kart World) when the phone has the
+  RAM the profile requires (Mario Kart World: 14 GiB; Bananza: 10) and, on Xclipse, a RADV driver;
+  for Ocarina of Time on the Galaxy S26 with RADV, where upstream reports it playable; otherwise
+  LoopNative for profiled games and on 8 GB phones.
+- **LoopNative options:** guest memory on storage, thermal governor, keep my settings, smooth
+  motion (FSR 3 frame generation, off by default). **LoopNative report** runs Prepare again.
+- **LoopNative Pack options:** full vegetation, RAM saver, RAM saver: Strong, soft textures;
+  **Import a Banana Native pack**; **Build all shaders now**.
+
+### What LoopNative changes in Banana Native
+
+Banana Native asks for a 12 GB phone and has a low-RAM class for "12 GB or less". LoopNative adds
+a class below it for **8 GB phones** (the Galaxy Z Flip5), set once per game and changeable after:
+
+- RAM saver: Strong from the first start (file-backed shader and texture pools, the texture cache
+  at a quarter of RAM, textures without their two finest levels);
+- less vegetation, memory pools placed in parts of 256 MiB, and a render of 1280x720 at most.
+
+On the **Galaxy S26** the pack engine keeps what Hokkaido tuned on that very phone (Ocarina of
+Time: mesh draws through compute on RADV, Hold 60 fps, lighter textures and pools). These are
+changes to how the engine is configured and started. Its native code is still Banana Native
+v0.3.45's release build: `tools/android/build_bananative_native.sh` builds it from source when a
+change needs it.
 
 ## Galaxy Z Flip5
 
@@ -130,5 +151,10 @@ LoopNative builds on [Hokkaido](https://github.com/pavelgajdo/Hokkaido) by pavel
 continues [Lichii](https://github.com/zortos293/Lichii) by Zortos and Eglantine, Eden, yuzu and
 Sudachi, and their contributors, including Eglantine's original developer Camille LaVey. Original
 copyright notices and third-party licenses are retained.
+
+LoopNative Pack is [Banana Native](https://git.eden-emu.dev/moceure/BananaNative) by moceure and
+its contributors (MIT licence, [src/android/banana/LICENSE](src/android/banana/LICENSE)), based on
+[nxnative](https://github.com/seedds/nxnative) by seedds, embedded the way Hokkaido embeds it. Its
+frame generation uses Lossless Scaling's LSFG through Eden's port (GPL-3.0).
 
 See [LICENSE.txt](LICENSE.txt) and the source files for the applicable license terms.

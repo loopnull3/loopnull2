@@ -3,8 +3,8 @@
 LoopNative is a Switch 2 engine for the **Samsung Galaxy Z Flip5** (SM-F731\*, Snapdragon 8 Gen 2
 for Galaxy, Adreno 740, 8 GB RAM) and the **Galaxy S26 / S26+ with Exynos 2600** (SM-S942\*,
 SM-S947\*, Xclipse 960, 12 GB), built on [Hokkaido](https://github.com/pavelgajdo/Hokkaido)
-android-0.7.1. It replaces Hokkaido's second engine, Banana Native, which this fork removes
-entirely: no prebuilt Banana Native libraries are downloaded or shipped.
+android-0.7.1. Next to it sits **LoopNative Pack**: Hokkaido's second engine, Banana Native, with
+LoopNative's changes for these phones (below).
 
 This document says what LoopNative does today, what it does not do yet, and the plan from here.
 
@@ -32,7 +32,8 @@ every game on an 8 GB phone.
 
 ### Honest status
 
-- **Nothing here has run on a Flip5 or an S26 yet.** The code compiles and the portable core has host tests
+- **Nothing here has run on a Flip5 or an S26 yet**, LoopNative Pack's 8 GB class included: no
+  one has reported Banana Native on an 8 GB phone. The code compiles and the portable core has host tests
   (`src/loopnative/tests`), but no game was booted with it on the phone it targets.
 - **Memory is the wall.** Upstream reports Ocarina of Time running out of memory on 12 GB phones
   and Mario Kart World needing a 16 GB phone. The Flip5 has 8 GB. Storage-backed guest memory is
@@ -44,11 +45,34 @@ every game on an 8 GB phone.
 - **The GPU driver matters.** Qualcomm's stock driver lacks BC textures, so textures are decoded
   into more memory. Mesa Turnip (installable through the GPU driver manager) is recommended.
 
-## Roadmap: a native engine
+## LoopNative Pack: Banana Native, modified
 
-The goal behind the name is an engine that, like Banana Native did, runs a game's code natively
-and its NVN graphics calls directly on Vulkan instead of emulating the GPU, but generic rather than
-per-game, and written for Adreno 740. Prepare is the first piece of it. The steps:
+LoopNative 0.1 reads a game's files as they are. The engine that rebuilds them is
+[Banana Native](https://git.eden-emu.dev/moceure/BananaNative) (MIT): Prepare rewrites the game's
+code and translates its shaders into a pack, then the code runs natively and NVN draws through
+Vulkan. Writing that from nothing is years of work, so LoopNative Pack takes Banana Native v0.3.45
+as Hokkaido embeds it (`src/android/banana`: its Android sources in `upstream/`, Hokkaido's
+patches, its native libraries from the pinned release) and changes it for these phones.
+
+| Change | Where | Why |
+|---|---|---|
+| 8 GB class | `LoopNativeTuning.java`, from `HokkaidoBridge.prepareStart` | Banana Native's lowest class is "12 GB or less". On 8 GB a game starts with RAM saver: Strong, less vegetation, pools placed in 256 MiB parts and a render of 1280x720 at most. Set once per game; the player's later changes stay. |
+| Auto by phone | `GameEngine.autoIsPack` | The pack only where it can play: the profile's required RAM against the phone's, a RADV driver on Xclipse, and Ocarina of Time on the S26 (bring-up in its profile, playable there upstream). |
+| RAM requirement read from the profile | `LoopNativeTuning.requiredRamGib` | Banana Native measured them on its own engine (Mario Kart World 14 GiB, Bananza 10). |
+
+What is **not** changed yet is Banana Native's native code: the game hosts are its release
+build. Changing them (a profile's `low_ram_*` keys for an 8 GB class, an Adreno 740 path) means
+building the hosts from source with `tools/android/build_bananative_native.sh` and
+`-PbananaNativeLibs`, and each such change needs a log from the phone to justify it. Known limits
+on these phones, from Banana Native's own notes: it is tested on Snapdragon 8 Elite phones with
+16 GB; Mario Kart World's compute shaders want 48 KiB of shared memory (Adreno 740 has 32);
+Fire Emblem needs Turnip on Adreno 740.
+
+## Roadmap: LoopNative's own native path
+
+LoopNative's own engine would, like Banana Native, run a game's code natively and its NVN
+graphics calls directly on Vulkan, but generic rather than per-game. Prepare is the first piece
+of it. The steps:
 
 1. **AOT patch table.** Keep the patch sites Prepare finds in the pack, so a start no longer scans
    the code (NCE patches at load time today). Measure the start-up time it saves on the Flip5.
