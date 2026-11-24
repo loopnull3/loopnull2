@@ -64,10 +64,25 @@ a class below it for **8 GB phones** (the Galaxy Z Flip5), set once per game and
 - less vegetation, memory pools placed in parts of 256 MiB, and a render of 1280x720 at most.
 
 On the **Galaxy S26** the pack engine keeps what Hokkaido tuned on that very phone (Ocarina of
-Time: mesh draws through compute on RADV, Hold 60 fps, lighter textures and pools). These are
-changes to how the engine is configured and started. Its native code is still Banana Native
-v0.3.45's release build: `tools/android/build_bananative_native.sh` builds it from source when a
-change needs it.
+Time: mesh draws through compute on RADV, Hold 60 fps, lighter textures and pools), and takes the
+fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnull3/Hokkaido)
+(branch `ccr-2855a939-9ewczd`, up to `acc997c`):
+
+- **White picture and white blocks** (Mario Kart World, Ocarina of Time): RADV on Xclipse did not
+  keep GLSL's NaN rules, so the fog shaders' NaN spread through bloom. The shader tools now write
+  min / max / clamp with the Switch's NaN results spelled out (`pack_tools/nan_exact.py`).
+- **Pink textures:** ASTC blocks that hold no ASTC data (empty or damaged storage) become
+  transparent zero texels instead of ASTC's pink error colour, and their place is logged; a level
+  read while the game rewrites it keeps its last whole content; a level in unmapped storage is made
+  from the level above; HDR endpoint modes are re-encoded as LDR
+  (`native_patches/0001-astc-error-colour-blocks.patch`).
+- **Depth bias** kept where a D24 target is made D32F (`native_patches/0002-d24-depth-bias.patch`).
+- Shaders built with older shader tools are dropped once, so the game builds them again.
+- Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
+  valid data black (dark patches on desert ground, black spreading on the title screen).
+
+CI builds the game hosts from Banana Native v0.3.45's source with those patches
+(`tools/android/build_bananative_hosts.sh`); the packer's libraries stay the release's.
 
 ## Galaxy Z Flip5
 

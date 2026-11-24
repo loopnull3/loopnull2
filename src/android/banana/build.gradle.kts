@@ -86,12 +86,15 @@ fun sha256(file: File): String {
 }
 
 val bananaApk = providers.gradleProperty("bananaApk").orElse(providers.environmentVariable("BANANA_APK"))
-// Native libraries built from Banana Native's source (tools/android/build_bananative_native.sh): each one
+// Native libraries built from Banana Native's source (tools/android/build_bananative_hosts.sh, which CI runs with
+// native_patches/, or build_bananative_native.sh): each one
 // replaces the release's library of the same name, the rest stay the release's.
 val nativeLibs = providers.gradleProperty("bananaNativeLibs")
     .orElse(providers.environmentVariable("BANANA_NATIVE_LIBS"))
 val generatedDir = layout.buildDirectory.dir("generated/banana")
 val cachedApk = layout.buildDirectory.file("banana/" + upstream.getValue("apk_url").substringAfterLast('/'))
+
+val packTools = files("pack_tools/patch_pack_tools.py", "pack_tools/nan_exact.py")
 
 val extractBananaRelease = tasks.register("extractBananaRelease") {
     val url = upstream.getValue("apk_url")
@@ -99,6 +102,7 @@ val extractBananaRelease = tasks.register("extractBananaRelease") {
     inputs.property("apk_sha256", expected)
     inputs.property("native_libs", nativeLibs.orElse(""))   // (a build without them extracts the release's again)
     nativeLibs.orNull?.let { inputs.files(fileTree(it) { include("*.so") }) }
+    inputs.files(packTools)
     outputs.dir(generatedDir)
     doLast {
         val apk = bananaApk.orNull?.let { File(it) } ?: cachedApk.get().asFile.also { file ->
@@ -130,6 +134,13 @@ val extractBananaRelease = tasks.register("extractBananaRelease") {
             logger.lifecycle("Banana Native: own build of ${lib.name}")
             lib.copyTo(File(out, "jni/arm64-v8a/" + lib.name), overwrite = true)
         }
+        // Hokkaido's changes to the release's shader tools (pack_tools/patch_pack_tools.py)
+        val python = System.getenv("PYTHON") ?: "python3"
+        val proc = ProcessBuilder(python, "-I", packTools.single { it.name == "patch_pack_tools.py" }.path, out.path,
+            packTools.single { it.name == "nan_exact.py" }.path).redirectErrorStream(true).start()
+        val text = proc.inputStream.bufferedReader().readText()
+        check(proc.waitFor() == 0) { "pack_tools/patch_pack_tools.py failed:\n$text" }
+        logger.lifecycle(text.trim())
     }
 }
 

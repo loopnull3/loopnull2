@@ -51,6 +51,7 @@ public final class HokkaidoBridge {
         Readiness.minSdk = BuildConfig.NX_MIN_SDK;
         UpdateCheck.android12 = BuildConfig.NX_MIN_SDK < 33;
         DumpCheck.workOverride = (dump, titleId) -> workFolder(app, dump, titleId);
+        if (app.getPackageName().equals(android.app.Application.getProcessName())) new Thread(() -> dropOldShadersAll(app), "hokkaido-shaders").start();
     }
 
     /**
@@ -336,6 +337,7 @@ public final class HokkaidoBridge {
         }
         startingSettings(c, id);
         LoopNativeTuning.apply(c, id);
+        if (plan.game.packDir != null && ShaderLibs.layerCovers(id, Prefs.layerEnv(c, id))) dropOldShaders(new File(plan.game.packDir), shaderToolsVersion(c));
         String driverName = null;
         if (driverZip == null || driverZip.isEmpty()) {
             GpuDriver.choice(c, id, GpuDriver.SYSTEM);
@@ -352,6 +354,53 @@ public final class HokkaidoBridge {
         boolean first = Prefs.folder(c, "save_" + id) == null;
         if (first && isEmpty(shared) && !own.getAbsoluteFile().equals(shared.getAbsoluteFile()) && !isEmpty(own)) copyTree(own, shared);
         Prefs.folder(c, "save_" + id, shared.getPath());
+    }
+
+    /** Holds the shader tools' version (shaderToolsVersion) the pack's shaders were last dropped for, then what was removed. */
+    private static final String SHADER_TOOLS_MARK = "hokkaido-shader-tools";
+
+    /** The shader tools' version, assets/pack/version.txt, which pack_tools/patch_pack_tools.py changes with every change to Hokkaido's tools; null when unreadable. */
+    private static String shaderToolsVersion(Context c) {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getAssets().open("pack/version.txt"), java.nio.charset.StandardCharsets.UTF_8))) {
+            String v = r.readLine();
+            return v == null || v.trim().isEmpty() ? null : v.trim();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Shaders built with other shader tools than this APK's (Hokkaido's changes in pack_tools/nan_exact.py: NaN-exact min / max / clamp, ASTC's
+     * error colour) carry the release tools' version stamp, so nothing builds them again by itself: when the mark names another tools version,
+     * the pack's libraries (shaders/v-*) and the shader layer's (shaders/layer/lib) are removed, and the mark records this version and what went.
+     * The layer keeps its requests and builds them again while the game plays (or Build all shaders now). Only for a game the layer covers, which
+     * plays without a library meanwhile.
+     */
+    private static synchronized void dropOldShaders(File packDir, String tools) {
+        if (tools == null) return;
+        File sh = new File(packDir, "shaders"), mark = new File(sh, SHADER_TOOLS_MARK);
+        try {
+            if (mark.isFile() && tools.equals(java.nio.file.Files.readAllLines(mark.toPath()).stream().findFirst().orElse("").trim())) return;
+        } catch (IOException e) {
+            // unreadable: dropped again
+        }
+        StringBuilder gone = new StringBuilder(tools).append('\n');
+        File[] libs = sh.listFiles(f -> f.isDirectory() && f.getName().startsWith("v-"));
+        if (libs != null) for (File d : libs) { Mods.deleteTree(d); gone.append(d.getName()).append(d.exists() ? " (not removed)\n" : "\n"); }
+        File layer = new File(sh, "layer/lib");
+        if (layer.exists()) { Mods.deleteTree(layer); gone.append("layer/lib").append(layer.exists() ? " (not removed)\n" : "\n"); }
+        try {
+            if (sh.isDirectory() || sh.mkdirs()) java.nio.file.Files.write(mark.toPath(), gone.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            // no mark: dropped again at the next start
+        }
+    }
+
+    /** dropOldShaders for every pack in app storage, once Hokkaido's main process starts (never in the packer's or a game's process) */
+    private static void dropOldShadersAll(Context c) {
+        String tools = shaderToolsVersion(c);
+        File[] packs = AppStorage.packs(c).listFiles(f -> f.isDirectory() && f.getName().matches("[0-9A-Fa-f]{16}"));
+        if (packs != null) for (File p : packs) if (ShaderLibs.layerCovers(p.getName().toUpperCase(Locale.ROOT), Prefs.layerEnv(c, p.getName()))) dropOldShaders(p, tools);
     }
 
     /** The starting settings' version (startingSettings): raised when they change, so a game takes the new ones once. */

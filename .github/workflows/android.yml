@@ -72,6 +72,13 @@ jobs:
           key: android-cpm-${{ hashFiles('cpmfile.json', 'externals/cpmfile.json', 'src/**/cpmfile.json') }}
           restore-keys: android-cpm-
 
+      - name: Build Banana Native hosts
+        # The embedded release's game hosts from its source with Hokkaido's patches (src/android/banana/native_patches)
+        run: |
+          chmod +x tools/android/build_bananative_hosts.sh
+          tools/android/build_bananative_hosts.sh "$RUNNER_TEMP/bananative" "$RUNNER_TEMP/bananative-libs"
+          echo "BANANA_NATIVE_LIBS=$RUNNER_TEMP/bananative-libs" >> "$GITHUB_ENV"
+
       - name: Build APK
         env:
           CCACHE: "true"

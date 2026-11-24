@@ -60,10 +60,19 @@ patches, its native libraries from the pinned release) and changes it for these 
 | Auto by phone | `GameEngine.autoIsPack` | The pack only where it can play: the profile's required RAM against the phone's, a RADV driver on Xclipse, and Ocarina of Time on the S26 (bring-up in its profile, playable there upstream). |
 | RAM requirement read from the profile | `LoopNativeTuning.requiredRamGib` | Banana Native measured them on its own engine (Mario Kart World 14 GiB, Bananza 10). |
 
-What is **not** changed yet is Banana Native's native code: the game hosts are its release
-build. Changing them (a profile's `low_ram_*` keys for an 8 GB class, an Adreno 740 path) means
-building the hosts from source with `tools/android/build_bananative_native.sh` and
-`-PbananaNativeLibs`, and each such change needs a log from the phone to justify it. Known limits
+| NaN-exact min / max / clamp | `pack_tools/nan_exact.py`, appended to the release's shader tools at build time | RADV on Xclipse did not keep GLSL's NaN rules: white picture and white blocks in Mario Kart World and Ocarina of Time. Found and fixed on a Galaxy S26. |
+| ASTC blocks that are no ASTC data | `native_patches/0001-astc-error-colour-blocks.patch` (with `native_patches/astcenc`) | Pink error-colour texels become transparent zero and are logged; a level read mid-rewrite keeps its last whole content; unmapped levels come from the level above; HDR endpoint modes become LDR. |
+| D24 depth bias | `native_patches/0002-d24-depth-bias.patch` | A constant depth bias kept where a D24 target is made D32F. |
+| Old shaders dropped | `HokkaidoBridge.dropOldShaders` | Shaders built with other shader tools are removed once, so the fixes above reach games already prepared. |
+
+The last four come from [loopnull3/Hokkaido](https://github.com/loopnull3/Hokkaido), branch
+`ccr-2855a939-9ewczd` (up to `acc997c`), where they were made against a Galaxy S26. Its three
+shader passes that read exact pink as 0 are left out, as that branch's last commit does: they
+turned valid data black. CI builds the game hosts from Banana Native v0.3.45's source with the
+patches (`tools/android/build_bananative_hosts.sh`); the packer's libraries stay the release's.
+
+Further native changes (a profile's `low_ram_*` keys for an 8 GB class, an Adreno 740 path) go the
+same way, as patches in `native_patches/`, and each needs a log from the phone to justify it. Known limits
 on these phones, from Banana Native's own notes: it is tested on Snapdragon 8 Elite phones with
 16 GB; Mario Kart World's compute shaders want 48 KiB of shared memory (Adreno 740 has 32);
 Fire Emblem needs Turnip on Adreno 740.

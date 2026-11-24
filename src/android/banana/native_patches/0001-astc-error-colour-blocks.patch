@@ -1,0 +1,574 @@
+diff --git a/android/host/CMakeLists.txt b/android/host/CMakeLists.txt
+index a6b76633..587c46f9 100644
+--- a/android/host/CMakeLists.txt
++++ b/android/host/CMakeLists.txt
+@@ -8,7 +8,7 @@
+ # dm/host/plat/movie_avc_android.c). The rest of their entry points come from dm/gfx/nvn/android_stub.c, which logs [RED] lines (what the Vulkan replay does not do yet,
+ # Vulkan and OpenGL games on Metal).
+ cmake_minimum_required(VERSION 3.22)
+-project(nxhost C ASM)
++project(nxhost C CXX ASM)
+ 
+ if(NOT ANDROID OR NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+   message(FATAL_ERROR "libnxhost is built for Android arm64-v8a only: use the NDK toolchain file with -DANDROID_ABI=arm64-v8a")
+@@ -103,6 +103,12 @@ target_include_directories(dav1d PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dav1d_confi
+ target_compile_options(dav1d PRIVATE -O2 -w -fvisibility=hidden)
+ target_compile_definitions(dav1d PRIVATE _GNU_SOURCE)
+ 
++# ASTC blocks of HDR endpoint modes re-encoded as LDR ones on upload, for drivers without ASTC's HDR profile (dm/gfx/vk_android/vka_astc_hdr.cpp): astcenc
++# (dm/third_party/astcenc, Apache-2.0), in a library of its own. Static libc++ (the NDK's default STL for CMake), hidden by the hosts' version script
++file(GLOB ASTCENC_CPP CONFIGURE_DEPENDS ${TP}/astcenc/*.cpp)
++add_library(hkastc STATIC ${ASTCENC_CPP} ${GFX}/vk_android/vka_astc_hdr.cpp)
++target_include_directories(hkastc PRIVATE ${TP}/astcenc)
++target_compile_options(hkastc PRIVATE -O2 -w -fvisibility=hidden)
+ # One host: target <tgt> with the profile of <game> compiled in. The game profile header, as dm/host/Makefile makes it (game.py header), goes into gen/<game>
+ function(nxhost_add tgt game)
+   set(GAME_H ${GEN}/${game}/game_profile.h)
+@@ -127,7 +133,7 @@ function(nxhost_add tgt game)
+   set_source_files_properties(${VKA_C} PROPERTIES COMPILE_OPTIONS -O2)
+   target_link_options(${tgt} PRIVATE -Wl,-Bsymbolic -Wl,--no-undefined -Wl,--error-limit=0 -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+   set_target_properties(${tgt} PROPERTIES LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libnxhost.map)
+-  target_link_libraries(${tgt} PRIVATE vpx dav1d zstddec aaudio mediandk android log m dl z)   # libvulkan.so is opened at run time (vka_dev.c)
++  target_link_libraries(${tgt} PRIVATE vpx dav1d zstddec hkastc aaudio mediandk android log m dl z)   # libvulkan.so is opened at run time (vka_dev.c)
+ endfunction()
+ 
+ if(NX_GAMES)
+diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
+index cb1b2187..24397d65 100644
+--- a/dm/gfx/vk_android/vka.h
++++ b/dm/gfx/vk_android/vka.h
+@@ -298,6 +298,7 @@ typedef struct vka_img {
+     uint64_t wb_fence;       // the fence of the submission that holds the last copy of its GPU content back into its storage (vka_tex_writeback; 0: none): vka_wbfollow.h
+     int wbf_waiting;         // the prepare's last scan found it waiting for that copy-back; a scan that only runs for waiting images visits just these (wbf_visit)
+     int wt;                  // the game writes it through WriteTexels (vka_tex.c mtl_tex_write_region): never tracked again
++    uint32_t astc_whole;     // ASTC: the image levels (bits) that took an upload with no block that is no ASTC data (vka_tex.c astc_keep)
+     uint64_t edge_h[2]; int edged;
+     uint64_t hash;           // DM_VK_NANSCAN: a hash of the storage at the last upload (vka_tex_id_check)
+     uint64_t gw_seen; int from_mem; uint64_t head, up_fence; uint8_t *snap;   // head, up_fence: DM_VK_NANSCAN's storage watch   // the newest GPU write into guest memory its last upload included (vka_tex.c gw_t); content from guest storage (ST_TRACK / ST_FILL)
+diff --git a/dm/gfx/vk_android/vka_astc_hdr.cpp b/dm/gfx/vk_android/vka_astc_hdr.cpp
+new file mode 100644
+index 00000000..607b5f95
+--- /dev/null
++++ b/dm/gfx/vk_android/vka_astc_hdr.cpp
+@@ -0,0 +1,195 @@
++// ASTC blocks with HDR colour endpoint modes in a texture of an ASTC UNORM / SRGB format (Hokkaido). The Switch's GPU decodes ASTC's full profile, so a game's
++// texture may hold such blocks (Mario Kart World's road paint and dash panels); a driver without the HDR profile (RADV on Xclipse: its ASTC check samples an HDR
++// void-extent block as (1, 0, 1, 1)) decodes each as the error colour, magenta. Every upload of ASTC storage goes through vka_tex.c astc_clean, which hands the
++// blocks here: the few that may be HDR are found by their header bits, checked with astcenc's block decoder, decoded with the HDR profile, clamped to [0, 1] and
++// encoded again with the LDR one (astcenc, dm/third_party/astcenc, Apache-2.0), in place
++#include "astcenc.h"
++#include <cstdint>
++#include <cstring>
++#include <mutex>
++#include <vector>
++
++namespace {
++constexpr uint32_t HDR_CEMS = 1u << 2 | 1u << 3 | 1u << 7 | 1u << 11 | 1u << 14 | 1u << 15;   // colour endpoint modes of the HDR profile
++constexpr size_t CHUNK = 2048;   // blocks decoded and encoded at once
++
++// Bits of an integer sequence of n values of quantization method q (QUANT_2 ... QUANT_32): bits, trits, quints per value
++unsigned ise_bits(unsigned n, unsigned q) {
++    static const uint8_t b[12] = {1, 0, 2, 0, 1, 3, 1, 2, 4, 2, 3, 5}, t[12] = {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0}, u[12] = {0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0};
++    return n * b[q] + (t[q] ? (8 * n + 4) / 5 : 0) + (u[q] ? (7 * n + 2) / 3 : 0);
++}
++// The weight bits of a 2D block mode, 0 for a reserved one (the ASTC specification's block mode table); *gx, *gy: its weight grid
++unsigned weight_bits(unsigned m, unsigned *gx = nullptr, unsigned *gy = nullptr) {
++    unsigned q = (m >> 4) & 1, h = (m >> 9) & 1, d = (m >> 10) & 1, a = (m >> 5) & 3, x, y;
++    if (m & 3) {
++        q |= (m & 3) << 1;
++        unsigned b = (m >> 7) & 3;
++        switch ((m >> 2) & 3) {
++        case 0: x = b + 4; y = a + 2; break;
++        case 1: x = b + 8; y = a + 2; break;
++        case 2: x = a + 2; y = b + 8; break;
++        default: b &= 1; if (m & 0x100) { x = b + 2; y = a + 2; } else { x = a + 2; y = b + 6; }
++        }
++    } else {
++        q |= ((m >> 2) & 3) << 1;
++        if (!((m >> 2) & 3)) return 0;
++        unsigned b = (m >> 9) & 3;
++        switch ((m >> 7) & 3) {
++        case 0: x = 12; y = a + 2; break;
++        case 1: x = a + 2; y = 12; break;
++        case 2: x = a + 6; y = b + 6; d = 0; h = 0; break;
++        default: if (((m >> 5) & 3) > 1) return 0; x = (m >> 5) & 1 ? 10 : 6; y = (m >> 5) & 1 ? 6 : 10;
++        }
++    }
++    unsigned n = x * y * (d + 1), bits = ise_bits(n, q - 2 + 6 * h);
++    if (gx) *gx = x;
++    if (gy) *gy = y;
++    return n <= 64 && bits >= 24 && bits <= 96 ? bits : 0;
++}
++// A block no decoder reads, from its header: a malformed void-extent block, a reserved block mode, a weight grid larger than the block, four partitions on two planes
++bool surely_bad(const uint8_t *b, unsigned bw, unsigned bh) {
++    uint32_t w = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
++    if ((w & 0x1FF) == 0x1FC) return ((w >> 10) & 3) != 3;
++    unsigned gx, gy;
++    if (!weight_bits(w & 0x7FF, &gx, &gy) || gx > bw || gy > bh) return true;
++    return ((w >> 11) & 3) == 3 && (w >> 10) & 1 && (w & 0x183) != 0x100;   // (bit 10 is no plane bit in the 0x100 layout)
++}
++unsigned bits_at(const uint8_t *b, unsigned at, unsigned n) {   // n (up to 12) bits from bit at
++    unsigned v = 0;
++    for (unsigned i = 0; i < n; i++) v |= ((b[(at + i) >> 3] >> ((at + i) & 7)) & 1u) << i;
++    return v;
++}
++// A block that may hold an HDR endpoint mode, from its header's bits; the others never do (the decoder checks these)
++bool maybe_hdr(const uint8_t *b) {
++    uint32_t w = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
++    if ((w & 0x1FF) == 0x1FC) return (w >> 9) & 1;   // void-extent: its HDR bit
++    unsigned parts = ((w >> 11) & 3) + 1;
++    if (parts == 1) return (HDR_CEMS >> ((w >> 13) & 15)) & 1;
++    if (!((w >> 23) & 3)) return (HDR_CEMS >> ((w >> 25) & 15)) & 1;   // partitions of one mode
++    // a mode per partition: a class and a selector bit and two mode bits each, the bits past the first six just below the weights
++    unsigned wb = weight_bits(w & 0x7FF), extra = 3 * parts - 4;
++    if (!wb) return false;   // a reserved block mode: an error block everywhere
++    unsigned enc = ((w >> 23) & 63) | bits_at(b, 128 - wb - extra, extra) << 6, base = (enc & 3) - 1;
++    for (unsigned i = 0; i < parts; i++) if ((HDR_CEMS >> (((base + ((enc >> (2 + i)) & 1)) << 2) + ((enc >> (2 + parts + 2 * i)) & 3))) & 1) return true;
++    return false;
++}
++
++struct codec { astcenc_context *dec = nullptr, *enc = nullptr; bool tried = false; };
++std::mutex g_mu;
++codec g_codec[2][13][13];   // [SRGB][block width][block height]
++
++astcenc_context *make(astcenc_profile prof, unsigned bw, unsigned bh, unsigned flags, float quality) {
++    astcenc_config cfg;
++    if (astcenc_config_init(prof, bw, bh, 1, quality, flags, &cfg) != ASTCENC_SUCCESS) return nullptr;
++    astcenc_context *c = nullptr;
++    return astcenc_context_alloc(&cfg, 1, &c) == ASTCENC_SUCCESS ? c : nullptr;
++}
++
++codec *codec_of(unsigned bw, unsigned bh, int srgb) {   // (g_mu held)
++    if (bw < 4 || bw > 12 || bh < 4 || bh > 12) return nullptr;
++    codec &c = g_codec[srgb ? 1 : 0][bw][bh];
++    if (!c.tried) {
++        c.tried = true;
++        c.dec = make(ASTCENC_PRF_HDR, bw, bh, ASTCENC_FLG_DECOMPRESS_ONLY, ASTCENC_PRE_FASTEST);
++        c.enc = make(srgb ? ASTCENC_PRF_LDR_SRGB : ASTCENC_PRF_LDR, bw, bh, 0, ASTCENC_PRE_FAST);
++    }
++    return c.dec && c.enc ? &c : nullptr;
++}
++}
++
++// The HDR blocks of n ASTC blocks of bw x bh texels made LDR in place; → how many were
++extern "C" size_t hk_astc_hdr_to_ldr(uint8_t *data, size_t n, unsigned bw, unsigned bh, int srgb) {
++    std::vector<size_t> may;
++    for (size_t i = 0; i < n; i++) if (maybe_hdr(data + 16 * i)) may.push_back(i);
++    if (may.empty()) return 0;
++    std::lock_guard<std::mutex> lock(g_mu);
++    codec *c = codec_of(bw, bh, srgb);
++    if (!c) return 0;
++    std::vector<size_t> hdr;
++    for (size_t i : may) {
++        astcenc_block_info bi;
++        if (astcenc_get_block_info(c->dec, data + 16 * i, &bi) == ASTCENC_SUCCESS && !bi.is_error_block && bi.is_hdr_block) hdr.push_back(i);
++    }
++    const astcenc_swizzle swz = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
++    std::vector<uint8_t> blocks, out;
++    std::vector<float> px;
++    for (size_t k0 = 0; k0 < hdr.size(); k0 += CHUNK) {
++        size_t k = hdr.size() - k0 < CHUNK ? hdr.size() - k0 : CHUNK;
++        blocks.resize(16 * k); out.resize(16 * k); px.resize(k * bw * bh * 4);
++        for (size_t j = 0; j < k; j++) memcpy(&blocks[16 * j], data + 16 * hdr[k0 + j], 16);
++        void *slice = px.data();
++        astcenc_image img = {unsigned(k * bw), bh, 1, ASTCENC_TYPE_F32, &slice};   // the blocks side by side
++        if (astcenc_decompress_image(c->dec, blocks.data(), blocks.size(), &img, &swz, 0) != ASTCENC_SUCCESS) return 0;
++        astcenc_decompress_reset(c->dec);
++        for (float &v : px) v = v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f;   // (NaN: 0)
++        if (astcenc_compress_image(c->enc, &img, &swz, out.data(), out.size(), 0) != ASTCENC_SUCCESS) return 0;
++        astcenc_compress_reset(c->enc);
++        for (size_t j = 0; j < k; j++) memcpy(data + 16 * hdr[k0 + j], &out[16 * j], 16);
++    }
++    return hdr.size();
++}
++
++// Blocks of n that are no ASTC data at all (storage that holds something else: another texture's bytes, a layout this texture does not have): made the
++// void-extent block of 0 in place, as a driver would otherwise draw the error colour; → how many. Only an upload with a block its header already shows
++// as one is checked block by block with astcenc's decoder (the header check misses about a quarter of them; it never takes a valid block)
++extern "C" size_t hk_astc_bad_to_zero(uint8_t *data, size_t n, unsigned bw, unsigned bh, int srgb) {
++    static const uint8_t zero[16] = {0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
++    size_t i = 0;
++    while (i < n && !surely_bad(data + 16 * i, bw, bh)) i++;
++    if (i == n) return 0;
++    std::lock_guard<std::mutex> lock(g_mu);
++    codec *c = codec_of(bw, bh, srgb);
++    size_t bad = 0;
++    for (i = 0; i < n; i++) {
++        uint8_t *b = data + 16 * i;
++        astcenc_block_info bi;
++        bool err = c ? astcenc_get_block_info(c->dec, b, &bi) == ASTCENC_SUCCESS && bi.is_error_block : surely_bad(b, bw, bh);
++        if (err) { memcpy(b, zero, 16); bad++; }
++    }
++    return bad;
++}
++
++// The share of n 16-byte units that no decoder reads as ASTC blocks of bw x bh texels, by their headers (a diagnostic: what storage holds)
++extern "C" double hk_astc_bad_share(const uint8_t *data, size_t n, unsigned bw, unsigned bh) {
++    size_t bad = 0;
++    for (size_t i = 0; i < n; i++) bad += surely_bad(data + 16 * i, bw, bh);
++    return n ? (double)bad / (double)n : 0.0;
++}
++
++// The all-zero blocks of an ASTC level (w x h texels) filled from the level above it (pw x ph, its blocks as uploaded): that level decoded, halved with a box
++// filter, encoded with the LDR profile, and its blocks taken where this level's are all zero. Storage the guest left unmapped past a texture's finer levels
++// (Mario Kart World's road paint: the last pages of its coarser levels) then reads as the texture would at that level, not as zero texels; → blocks filled
++extern "C" size_t hk_astc_fill_zero(uint8_t *lvl, unsigned w, unsigned h, const uint8_t *prev, unsigned pw, unsigned ph, unsigned bw, unsigned bh, int srgb) {
++    static const uint8_t zero16[16] = {0};
++    size_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh, n = bx * by, pbx = (pw + bw - 1) / bw, pby = (ph + bh - 1) / bh, nz = 0;
++    for (size_t i = 0; i < n; i++) nz += !memcmp(lvl + 16 * i, zero16, 16);
++    if (!nz) return 0;
++    for (size_t i = 0; i < pbx * pby; i++) if (!memcmp(prev + 16 * i, zero16, 16)) return 0;   // the level above has holes too: nothing to take
++    std::lock_guard<std::mutex> lock(g_mu);
++    codec *c = codec_of(bw, bh, srgb);
++    if (!c) return 0;
++    const astcenc_swizzle swz = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
++    std::vector<float> src((size_t)pw * ph * 4), dst(bx * bw * by * bh * 4);
++    void *ss = src.data(), *ds = dst.data();
++    astcenc_image si = {pw, ph, 1, ASTCENC_TYPE_F32, &ss};
++    if (astcenc_decompress_image(c->dec, prev, pbx * pby * 16, &si, &swz, 0) != ASTCENC_SUCCESS) return 0;
++    astcenc_decompress_reset(c->dec);
++    unsigned dw = (unsigned)(bx * bw), dh = (unsigned)(by * bh);   // (padded to whole blocks: edge texels repeated)
++    for (unsigned y = 0; y < dh; y++) for (unsigned x = 0; x < dw; x++) {
++        unsigned x0 = 2 * (x < w ? x : w - 1), y0 = 2 * (y < h ? y : h - 1);
++        unsigned xs[2] = {x0 < pw ? x0 : pw - 1, x0 + 1 < pw ? x0 + 1 : pw - 1}, ys[2] = {y0 < ph ? y0 : ph - 1, y0 + 1 < ph ? y0 + 1 : ph - 1};
++        for (int k = 0; k < 4; k++) {
++            float s = 0;
++            for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) s += src[((size_t)ys[j] * pw + xs[i]) * 4 + k];
++            float v = s * 0.25f;
++            dst[((size_t)y * dw + x) * 4 + k] = v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f;
++        }
++    }
++    std::vector<uint8_t> out(n * 16);
++    astcenc_image di = {dw, dh, 1, ASTCENC_TYPE_F32, &ds};
++    if (astcenc_compress_image(c->enc, &di, &swz, out.data(), out.size(), 0) != ASTCENC_SUCCESS) return 0;
++    astcenc_compress_reset(c->enc);
++    size_t filled = 0;
++    for (size_t i = 0; i < n; i++) if (!memcmp(lvl + 16 * i, zero16, 16)) { memcpy(lvl + 16 * i, &out[16 * i], 16); filled++; }
++    return filled;
++}
+diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
+index 4f5e1961..3f401129 100644
+--- a/dm/gfx/vk_android/vka_tex.c
++++ b/dm/gfx/vk_android/vka_tex.c
+@@ -401,6 +401,11 @@ uint64_t nvn_sparse_gen(void); uint64_t nvn_sparse_copy(const void *pool, void *
+ int nvn_sparse_since(const void *pool, uint64_t a, uint64_t n, uint64_t gen, uint64_t stamp); void nvn_sparse_protect(const void *pool, uint64_t a, uint64_t n);
+ int nvn_sparse_any(const void *pool, uint64_t a, uint64_t n); int nvn_sparse_mapped(const void *pool, uint64_t a, uint64_t n);
+ static void upload(vka_img *im, const tex_t *t, VkCommandBuffer cb);
++static uint64_t astc_clean(VkFormat v, uint8_t *p, size_t n);
++static _Thread_local int g_up_holes;   // the upload under way reads storage the guest left partly unmapped (unmapped_content): astc_fill
++static int astc_fill(const vka_img *im, uint8_t *p, uint32_t lv, uint32_t ly, const uint8_t *prev);
++static void astc_bad_note(const tex_t *t, uint32_t level, uint32_t layer, uint64_t bad, size_t n);
++static int astc_keep(vka_img *im, uint32_t lv, uint64_t bad);
+ static uint64_t g_rows_up;   // bytes of partial row re-uploads (upload_rows_tracked)
+ 
+ // ---------- Sparse textures: images of their mapped levels ----------
+@@ -1020,15 +1025,15 @@ static void upload_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb) {
+     img_edges_take(im);
+     if (vka_nan_on()) im->hash = mem_hash(t->mem, t->L.size);
+     uint8_t *c = im->vpool ? NULL : gw_content(t->mem, t->L.size, &im->gw_seen);   // (a sparse pool's storage is read through its page table: upload_)
+-    if (!c && !im->vpool) c = unmapped_content(t);
+-    if (c) { tex_t tc = *t; tc.mem = c; upload(im, &tc, cb); free(c); g_gw_over++; } else upload(im, t, cb);
++    int holes = 0; if (!c && !im->vpool) holes = (c = unmapped_content(t)) != NULL;
++    if (c) { tex_t tc = *t; tc.mem = c; g_up_holes = holes; upload(im, &tc, cb); g_up_holes = 0; free(c); g_gw_over++; } else upload(im, t, cb);
+     if (vka_nan_on()) { im->head = mem_hash(t->mem, t->L.size < 64 ? t->L.size : 64); im->up_fence = vka_fence_last() + 1;
+         if (!im->snap) im->snap = malloc(256); if (im->snap) memcpy(im->snap, t->mem, t->L.size < 256 ? t->L.size : 256); }
+ }
+ static void upload_fill(vka_img *im, const tex_t *t, VkCommandBuffer cb) {   // the same without tracking (ST_FILL)
+     uint8_t *c = im->vpool ? NULL : gw_content(t->mem, t->L.size, &im->gw_seen);
+-    if (!c && !im->vpool) c = unmapped_content(t);
+-    if (c) { tex_t tc = *t; tc.mem = c; upload(im, &tc, cb); free(c); g_gw_over++; } else upload(im, t, cb);
++    int holes = 0; if (!c && !im->vpool) holes = (c = unmapped_content(t)) != NULL;
++    if (c) { tex_t tc = *t; tc.mem = c; g_up_holes = holes; upload(im, &tc, cb); g_up_holes = 0; free(c); g_gw_over++; } else upload(im, t, cb);
+ }
+ // A linear 2D texture of one level and layer whose pages the CPU wrote between byte lo and hi of its storage: only those rows again (Donkey Kong Bananza's glyph cache,
+ // 1024x8192 R8: the whole 8 MB was deswizzled and copied each time a glyph was rasterized into it). 0 = not such a texture (the caller uploads all of it)
+@@ -1043,6 +1048,8 @@ static int upload_rows_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+     img_edges_take(im);
+     vka_span s; if (!vka_scratch(pitch * (r1 - r0), 16, &s)) return 1;
+     for (uint32_t y = r0; y < r1; y++) memcpy(s.ptr + (size_t)(y - r0) * pitch, t->mem + (size_t)y * st, pitch);
++    uint64_t bad = astc_clean(f->vk, s.ptr, pitch * (r1 - r0)); astc_bad_note(t, 0, 0, bad, pitch * (r1 - r0) / 16);
++    if (bad) { if (astc_keep(im, 0, bad)) return 1; } else if (!r0 && r1 == by) astc_keep(im, 0, 0);   // (some rows of the level do not make it whole)
+     uint32_t y0 = r0 * f->bh, y1 = r1 * f->bh > im->h ? im->h : r1 * f->bh;
+     VkBufferImageCopy c = {s.off, bx * f->bw, (r1 - r0) * f->bh, {im->aspect, 0, 0, 1}, {0, (int32_t)y0, 0}, {im->w, y1 - y0, 1}};
+     vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+@@ -1094,6 +1101,8 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+                 vka_span s; if (!vka_scratch(sz, 16, &s)) { free(bst); return 0; }
+                 if (nvn_deswizzle_rows(d, tl, ly, t->mem, s.ptr - (size_t)y0 * pitch, pitch, y0, y1)) {
+                     VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target); free(bst); return 0; }
++                uint64_t bad = astc_clean(f->vk, s.ptr, sz); astc_bad_note(t, tl, ly, bad, sz / 16);
++                if (bad && astc_keep(im, lv, bad)) continue;   // (bands of a level: a whole band does not make the level whole)
+                 uint32_t py0 = y0 * f->bh, py1 = y1 * f->bh > h ? h : y1 * f->bh;
+                 VkBufferImageCopy cp = {s.off, bx * f->bw, (y1 - y0) * f->bh, {im->aspect, lv, ly, 1}, {0, (int32_t)py0, 0}, {w, py1 - py0, 1}};
+                 vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+@@ -1109,8 +1118,115 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+ // A zero texel block: zeros, except ASTC, whose all-zero block is a reserved mode (the error colour): a void-extent block of colour (0, 0, 0, 0) there
+ static int is_astc(VkFormat v) { return v >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && v <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK; }
+ static const uint8_t k_astc_zero[16] = {0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+-static void astc_zero_blocks(uint8_t *p, size_t n) {   // the zeros of unmapped pages, as zero texels
+-    for (size_t i = 0; i + 16 <= n; i += 16) { uint64_t a, b; memcpy(&a, p + i, 8); memcpy(&b, p + i + 8, 8); if (!(a | b)) memcpy(p + i, k_astc_zero, 16); }
++static uint16_t half_unorm16(uint16_t h) {   // an FP16 value clamped to [0, 1], as UNORM16
++    uint32_t e = h >> 10 & 31, m = h & 1023;
++    if ((h & 0x8000) || (e == 31 && m)) return 0;   // negative, NaN
++    if (e >= 15) return 0xFFFF;   // 1 and above, infinity
++    if (!e) return (uint16_t)(((uint64_t)m * 65535 + (1u << 23)) >> 24);   // subnormal: m / 2^24
++    uint32_t u = (e + 112) << 23 | m << 13; float f; memcpy(&f, &u, 4);
++    return (uint16_t)(f * 65535.0f + 0.5f);
++}
++// Blocks a Switch never samples as the error colour but this driver does, in place: an all-zero block (storage the guest left unmapped or unwritten:
++// a tail of levels, a hole in a pool) becomes the void-extent block of 0, and an HDR void-extent block (no ASTC HDR profile on RADV / Xclipse) the LDR
++// one of its colour clamped to [0, 1]. Every upload of an ASTC texture from guest storage goes through it
++static _Atomic uint64_t g_astc_zero, g_astc_hdr;
++size_t hk_astc_hdr_to_ldr(uint8_t *data, size_t n, unsigned bw, unsigned bh, int srgb);   // vka_astc_hdr.cpp
++size_t hk_astc_bad_to_zero(uint8_t *data, size_t n, unsigned bw, unsigned bh, int srgb);
++// → the blocks that were no ASTC data (made zero texels too; astc_bad_note logs where)
++static const uint8_t dims[14][2] = {{4, 4}, {5, 4}, {5, 5}, {6, 5}, {6, 6}, {8, 5}, {8, 6}, {8, 8}, {10, 5}, {10, 6}, {10, 8}, {10, 10}, {12, 10}, {12, 12}};   // ASTC block sizes, in VkFormat order
++static uint64_t astc_clean(VkFormat v, uint8_t *p, size_t n) {
++    if (!is_astc(v)) return 0;
++    unsigned k = (unsigned)(v - VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
++    uint64_t nz = 0, nh = 0;
++    for (size_t i = 0; i + 16 <= n; i += 16) {
++        uint64_t a, b; memcpy(&a, p + i, 8); memcpy(&b, p + i + 8, 8);
++        if (!(a | b)) { memcpy(p + i, k_astc_zero, 16); nz++; continue; }
++        if ((a & 0xDFF) != 0xDFC || !(a & 0x200)) continue;   // void-extent: bits 0-8 0x1FC, 10-11 set; bit 9 HDR
++        uint64_t c = 0; for (int k = 0; k < 4; k++) c |= (uint64_t)half_unorm16((uint16_t)(b >> 16 * k)) << 16 * k;
++        a &= ~(uint64_t)0x200; memcpy(p + i, &a, 8); memcpy(p + i + 8, &c, 8); nh++;
++    }
++    nh += hk_astc_hdr_to_ldr(p, n / 16, dims[k / 2][0], dims[k / 2][1], (int)(k & 1));   // blocks of HDR endpoint modes: decoded and encoded as LDR
++    uint64_t bad = hk_astc_bad_to_zero(p, n / 16, dims[k / 2][0], dims[k / 2][1], (int)(k & 1));
++    static _Atomic int once; if (!atomic_exchange(&once, 1)) VLOG("ASTC uploads: all-zero blocks become zero texels, HDR blocks LDR ones (Hokkaido)");
++    if (!nz && !nh) return bad;
++    uint64_t z0 = atomic_fetch_add(&g_astc_zero, nz), h0 = atomic_fetch_add(&g_astc_hdr, nh), z1 = z0 + nz, h1 = h0 + nh;
++    if (63 - __builtin_clzll(z1 | 1) != 63 - __builtin_clzll(z0 | 1) || 63 - __builtin_clzll(h1 | 1) != 63 - __builtin_clzll(h0 | 1))   // a line per power of two crossed
++        VLOG("ASTC uploads: %llu all-zero blocks made zero texels, %llu HDR blocks made LDR so far (format %d, this upload %llu / %llu of %zu)",
++             (unsigned long long)z1, (unsigned long long)h1, (int)v, (unsigned long long)nz, (unsigned long long)nh, n / 16);
++    return bad;
++}
++// Textures whose upload found blocks that are no ASTC data are watched (astc_watch, from vka_tex_prepare): their storage is read again (every 64th prepare) and uploaded again
++// when it changed, logged with whether it holds ASTC data then; the textures over the same storage are logged when one joins (callers hold g_tmu)
++enum { NWATCH = 64 };
++static struct { uint64_t serial, hash; int gpu_logged, viewed; } g_watch[NWATCH]; static int g_nwatch;   // viewed: its storage read by the GPU too (gview)
++static uint64_t g_bad_total;
++double hk_astc_bad_share(const uint8_t *data, size_t n, unsigned bw, unsigned bh);   // vka_astc_hdr.cpp
++static int watched(uint64_t serial) { for (int i = 0; i < g_nwatch; i++) if (g_watch[i].serial == serial) return 1; return 0; }
++static void watch_add(uint64_t serial) {
++    for (int i = 0; i < g_nwatch; i++) if (g_watch[i].serial == serial) return;
++    if (g_nwatch == NWATCH) return;
++    g_watch[g_nwatch].serial = serial; g_watch[g_nwatch].hash = 0; g_watch[g_nwatch].gpu_logged = 0; g_watch[g_nwatch].viewed = 0; g_nwatch++;
++    smap_ent *e = map_get(serial); const vka_img *im = e ? e->im : NULL;
++    if (!im || !im->mem) return;
++    static int nd;   // what the storage holds: its first bytes, its pool, and how much of it reads as ASTC of other block sizes
++    if (nd++ < 24) {
++        uint8_t buf[4096]; size_t k = im->L.size < sizeof buf ? (size_t)im->L.size : sizeof buf, z = 0; uint64_t un = dm_guest_read_mapped(buf, (uintptr_t)im->mem, k);
++        char hex[3 * 48 + 1]; for (int i = 0; i < 48 && i < (int)k; i++) snprintf(hex + 3 * i, 4, "%02x ", buf[i]);
++        for (size_t i = 0; i < k; i++) z += !buf[i];
++        VLOG("ASTC watch: texture serial %llu %ux%u format %#x flags %#x levels %u storage %p+%#llx pool flags %#x (%llu pages of the first unmapped): first bytes %s; %.0f %% zero bytes; units not ASTC as 4x4 %.0f %%, 6x6 %.0f %%, 8x8 %.0f %%, 12x12 %.0f %%; track %d gpu-owned %d",
++             (unsigned long long)serial, im->d.width, im->d.height, im->d.format, im->d.flags, im->d.levels, (const void *)im->mem, (unsigned long long)im->L.size, pool_flags(im->pool), (unsigned long long)un, hex,
++             100.0 * z / (k ? k : 1), 100 * hk_astc_bad_share(buf, k / 16, 4, 4), 100 * hk_astc_bad_share(buf, k / 16, 6, 6), 100 * hk_astc_bad_share(buf, k / 16, 8, 8), 100 * hk_astc_bad_share(buf, k / 16, 12, 12),
++             im->track, im->gpu_owned);
++    }
++    uint64_t a = (uint64_t)(uintptr_t)im->mem, b = a + im->L.size; static int nl;
++    for (int j = 0; j < g_nlive && nl < 48; j++) {
++        const vka_img *o = g_live[j]; uint64_t oa = (uint64_t)(uintptr_t)o->mem, ob = oa + o->L.size;
++        if (o == im || !o->mem || ob <= a || oa >= b) continue;
++        nl++; VLOG("ASTC watch: texture serial %llu (%ux%u format %#x) shares storage with serial %llu %ux%u layers %u format %#x flags %#x target %d at %+lld bytes (gpu-owned %d, from storage %d)",
++                   (unsigned long long)serial, im->d.width, im->d.height, im->d.format, (unsigned long long)o->serial, o->d.width, o->d.height, o->layers, o->d.format, o->d.flags,
++                   o->d.target, (long long)(oa - a), o->gpu_owned, o->from_mem);
++    }
++}
++size_t hk_astc_fill_zero(uint8_t *lvl, unsigned w, unsigned h, const uint8_t *prev, unsigned pw, unsigned ph, unsigned bw, unsigned bh, int srgb);   // vka_astc_hdr.cpp
++// An upload of storage the guest left partly unmapped (g_up_holes; Mario Kart World maps its road paint textures without the last pages, which hold the coarser
++// levels): before astc_clean, a level's all-zero blocks are made from the level above it (prev: its blocks as uploaded, NULL when it was not whole), halved and
++// encoded again (hk_astc_fill_zero), instead of zero texels. → whether this level is whole now (a source for the next)
++static int astc_fill(const vka_img *im, uint8_t *p, uint32_t lv, uint32_t ly, const uint8_t *prev) {
++    if (!is_astc(im->f.vk)) return 0;
++    unsigned k = (unsigned)(im->f.vk - VK_FORMAT_ASTC_4x4_UNORM_BLOCK), bw = dims[k / 2][0], bh = dims[k / 2][1];
++    uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, pw = lv && im->w >> (lv - 1) ? im->w >> (lv - 1) : 1, ph = lv && im->h >> (lv - 1) ? im->h >> (lv - 1) : 1;
++    size_t n = (size_t)((w + bw - 1) / bw) * ((h + bh - 1) / bh);
++    if (lv && prev) {
++        size_t got = hk_astc_fill_zero(p, w, h, prev, pw, ph, bw, bh, (int)(k & 1));
++        static _Atomic uint64_t nf; uint64_t c = got ? atomic_fetch_add(&nf, 1) + 1 : 0;
++        if (got && (c <= 16 || !(c & (c - 1)))) VLOG("ASTC upload: texture serial %llu %ux%u level %u layer %u: %zu of %zu blocks of unmapped storage made from level %u (%llu levels so far)",
++                                                     (unsigned long long)im->serial, im->w, im->h, lv + im->base, ly, got, n, lv - 1 + im->base, (unsigned long long)c);
++    }
++    static const uint8_t z16[16] = {0};
++    for (size_t i = 0; i < n; i++) if (!memcmp(p + 16 * i, z16, 16)) return 0;
++    return 1;
++}
++// An upload of image level lv of ASTC storage that held bad blocks of no ASTC data (made zero texels by astc_clean) is not copied when that level took a whole upload
++// before: the storage was read while the game rewrote it (Mario Kart World's 1225x1225 ASTC 8x8 textures went from whole to a few thousand bad blocks and back,
++// several times, as the game streamed into them), and the image keeps its last whole content until the write that follows brings the new one (a CPU write is tracked,
++// and watch_add reads the storage again). Array textures take every upload (a layer's level may never have been whole). → 1 = leave the image's level as it is
++static int astc_keep(vka_img *im, uint32_t lv, uint64_t bad) {
++    if (!is_astc(im->f.vk) || lv >= 32) return 0;
++    if (!bad) { im->astc_whole |= 1u << lv; return 0; }
++    if (im->layers != 1 || !(im->astc_whole >> lv & 1)) return 0;
++    static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
++    if (k <= 16 || !(k & (k - 1))) VLOG("ASTC upload: texture serial %llu level %u read while rewritten (%llu bad blocks): its last whole content kept (%llu times so far)", (unsigned long long)im->serial, lv, (unsigned long long)bad, (unsigned long long)k);
++    return 1;
++}
++// Where uploads found blocks that are no ASTC data: the texture, level and layer, and its layout, for the first 64
++static void astc_bad_note(const tex_t *t, uint32_t level, uint32_t layer, uint64_t bad, size_t n) {
++    if (!bad) return;
++    g_bad_total += bad; watch_add(t->serial);
++    static _Atomic int k; if (atomic_fetch_add(&k, 1) >= 64) return;
++    const nvn_texdesc *d = &t->d;
++    VLOG("ASTC upload: texture serial %llu %ux%ux%u target %d format %#x flags %#x levels %u, level %u layer %u: %llu of %zu blocks are no ASTC data, made zero texels (storage %p, level at +%#llx, layer size %#llx)",
++         (unsigned long long)t->serial, d->width, d->height, d->depth, d->target, d->format, d->flags, d->levels, level, layer, (unsigned long long)bad, n,
++         (const void *)t->mem, (unsigned long long)nvn_tex_level_offset(d, level), (unsigned long long)t->L.layer_size);
+ }
+ // Zero texels without staging: a buffer of zero blocks (first half) and of ASTC's zero blocks (second half), the source of every unmapped part of a sparse texture
+ enum { ZHALF = 2 << 20 };
+@@ -1236,7 +1352,7 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
+                     if (so + sl > off + len) sl = off + len - so;
+                     if (sl > cap) { free(part); cap = sl; if (!(part = malloc(cap))) { VRED("sparse texture serial %llu: copy of %llu bytes not allocated", (unsigned long long)im->serial, (unsigned long long)sl); goto out; } }
+                     mapped += sl - nvn_sparse_copy(im->vpool, part, mem + so, sl);
+-                    if (is_astc(f->vk)) astc_zero_blocks(part, sl);
++                    { uint64_t bad = astc_clean(f->vk, part, sl); if (bad) { tex_t tt = {0}; tt.serial = im->serial; tt.d = im->d; tt.L = im->L; tt.mem = (uint8_t *)im->mem; astc_bad_note(&tt, lv, ly, bad, sl / 16); } }
+                     // the deswizzler reads level lv of layer ly at its offset in the whole storage, and writes row y at y * pitch: part holds just this run's bytes
+                     if (nvn_deswizzle_rows(d, lv, ly, (const uint8_t *)((uintptr_t)part - (uintptr_t)so), s.ptr - (size_t)y0 * pitch, pitch, y0, y1)) {
+                         VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)im->serial, d->format, d->target); goto out; }
+@@ -1309,7 +1425,7 @@ static int img_rebase(vka_img *im, uint32_t base, VkCommandBuffer cb) {
+     old->img = im->img; old->m = im->m; old->views = im->views; old->rs = im->rs; old->va = im->va;
+     uint32_t ob = im->base, ol = im->levels; uint64_t obytes = im->bytes;
+     g_img_bytes -= im->bytes;
+-    im->img = n->img; im->m = n->m; im->views = NULL; im->usage = n->usage; im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->w = n->w; im->h = n->h; im->levels = n->levels; im->base = n->base; im->bytes = n->bytes; im->fl = n->fl;
++    im->img = n->img; im->astc_whole = 0; im->m = n->m; im->views = NULL; im->usage = n->usage; im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->w = n->w; im->h = n->h; im->levels = n->levels; im->base = n->base; im->bytes = n->bytes; im->fl = n->fl;
+     im->rs = n->rs; im->va = n->va; im->rs_tw = n->rs_tw; im->rs_th = n->rs_th; im->bfloor = n->bfloor; im->bneed = n->bneed; im->dcap = n->dcap;   // (old's address space, still counted, goes back
+                                                                                                                            // at its img_destroy: a finer start is tried again once enough is free)
+     free(n);
+@@ -1430,7 +1546,7 @@ static int img_own(vka_img *im, VkCommandBuffer cb) {   // caller holds g_tmu; 1
+     if (ucb) vka_up_end();
+     n->inited = 1;
+     VkImage oi = im->img; vka_imem om = im->m; void *ov = im->views;
+-    im->img = n->img; im->m = n->m; im->views = NULL; im->usage = n->usage; im->bytes = n->bytes; im->fl = n->fl;
++    im->img = n->img; im->astc_whole = 0; im->m = n->m; im->views = NULL; im->usage = n->usage; im->bytes = n->bytes; im->fl = n->fl;
+     n->img = oi; n->m = om; n->views = ov; n->bytes = 0;
+     if (im->holds) { n->zold = im->zold; im->zold = n; }   // (a holder may read im->img unlocked: the old image stays until it lets go, vka_tex_drop)
+     else vka_after(vka_fence_last() + 1, img_destroy, n);   // (after the submission being recorded, which may hold commands that read it)
+@@ -1603,7 +1719,7 @@ static int soft_harden(vka_img *im, VkCommandBuffer cb, const char *why) {
+         return 0; }
+     if (im->gpu_owned) { static _Atomic int k; if (atomic_fetch_add(&k, 1) < 4) VRED("soft texture serial %llu: %s after the GPU wrote it: made whole from its storage, which does not hold those writes (open)", (unsigned long long)im->serial, why); }
+     VkImage oi = im->img; vka_imem om = im->m; void *ov = im->views; uint64_t ob = im->bytes; uint32_t ow = im->w, oh = im->h;
+-    im->img = n->img; im->m = n->m; im->views = NULL; im->usage = n->usage; im->bytes = n->bytes; im->w = n->w; im->h = n->h; im->levels = n->levels; im->base = 0;
++    im->img = n->img; im->astc_whole = 0; im->m = n->m; im->views = NULL; im->usage = n->usage; im->bytes = n->bytes; im->w = n->w; im->h = n->h; im->levels = n->levels; im->base = 0;
+     im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->fl = n->fl; im->pool_fit = n->pool_fit;   // (the new image's format list, as img_storage_upgrade takes it)
+     n->img = oi; n->m = om; n->views = ov; n->bytes = 0; g_img_bytes -= ob;
+     if (im->holds) { n->zold = im->zold; im->zold = n; }   // (a holder may read im->img unlocked: the old image stays until it lets go, vka_tex_drop)
+@@ -2166,13 +2282,19 @@ cut:;
+     // A piece that could not be deswizzled ends the upload there, as on the serial path: the pieces before it are copied, it and those after it are not
+     if (fail) VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target);
+     uint64_t bytes = 0;
++    const uint8_t **prev = g_up_holes && is_astc(f->vk) && !is3d ? calloc(im->layers, sizeof *prev) : NULL;   // (the pieces' spans stay put through this loop)
+     for (uint32_t i = 0; i < k; i++) {
+         piece_t *q = &pc[i];
+         if (atomic_load(&q->bad)) break;
++        int whole = prev && astc_fill(im, q->s.ptr, q->lv, q->ly, prev[q->ly]);
++        uint64_t bad = astc_clean(f->vk, q->s.ptr, q->pitch * q->by * q->z); astc_bad_note(t, q->lv + im->base, q->ly, bad, q->pitch * q->by * q->z / 16);
++        if (prev) prev[q->ly] = whole && !bad ? q->s.ptr : NULL;
++        if (astc_keep(im, q->lv, bad)) continue;
+         VkBufferImageCopy c = {q->s.off, q->bx * f->bw, q->by * f->bh, {im->aspect, q->lv, q->ly, 1}, {0, 0, 0}, {q->w, q->h, q->z}};
+         vk.vkCmdCopyBufferToImage(cb, q->s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+         bytes += q->pitch * q->by * q->z;
+     }
++    free(prev);
+     free(pc);
+     *nbytes = bytes;
+     return 1;
+@@ -2183,6 +2305,7 @@ static void upload(vka_img *im, const tex_t *t, VkCommandBuffer cb) {   // (call
+     uint64_t t0 = now_ns(), nb = 0; upload_(im, t, cb, &nb);
+     atomic_fetch_add_explicit(&g_up_ns, now_ns() - t0, memory_order_relaxed); atomic_fetch_add_explicit(&g_up_bytes, nb, memory_order_relaxed);
+ }
++static void prev_drop(uint8_t **p, uint32_t n) { if (p) { for (uint32_t i = 0; i < n; i++) free(p[i]); free(p); } }
+ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *nbytes) {
+     if (!im->vpool && upload_mt(im, t, cb, nbytes)) return;   // (a sparse pool's storage is read through its page table below, never at its address)
+     const nvn_texdesc *d = &t->d; const vka_fmt *f = &im->f;
+@@ -2193,14 +2316,15 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+     // A sparse pool's texture: gathered from its page table by bands, unmapped ones as zero texels (until 2026-11-03 a copy of its whole range was made first)
+     if (im->vpool) { if (!im->vbind) upload_sparse_parts(im, cb, 0, 0, 1, 0); return; }   // (a GPU-written one's content is the GPU's: sparse_bind)
+     uint8_t *part = NULL; const uint8_t *src = t->mem;
++    uint8_t **prev = g_up_holes && is_astc(f->vk) && !linear && !is3d ? calloc(im->layers, sizeof *prev) : NULL;   // (copies: vka_up_point may let the spans go)
+     for (uint32_t lv = 0; lv < (linear ? 1 : im->levels); lv++) {
+         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, z = is3d ? (im->depth >> lv ? im->depth >> lv : 1) : 1;
+         uint32_t bx = (w + f->bw - 1) / f->bw, by = (h + f->bh - 1) / f->bh;
+         size_t pitch = (size_t)bx * f->bpb, piece = pitch * by * z;
+         for (uint32_t ly = 0; ly < (linear ? 1 : im->layers); ly++) {
+-            vka_span s; if (!vka_scratch(piece, 16, &s)) { free(part); return; }
++            vka_span s; if (!vka_scratch(piece, 16, &s)) { free(part); prev_drop(prev, im->layers); return; }
+             if (linear) { size_t st = im->d.stride ? im->d.stride : d->stride ? d->stride : pitch; for (uint32_t y = 0; y < by; y++) memcpy(s.ptr + y * pitch, src + y * st, pitch); }
+-            else if (nvn_deswizzle(d, lv + im->base, ly, src, s.ptr, pitch)) { VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target); free(part); return; }   // (image level lv is texture level lv + base: a soft texture's; a sparse pool's go above)
++            else if (nvn_deswizzle(d, lv + im->base, ly, src, s.ptr, pitch)) { VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target); free(part); prev_drop(prev, im->layers); return; }   // (image level lv is texture level lv + base: a soft texture's; a sparse pool's go above)
+             if (d->format >= 0x79 && d->format <= 0x94 && vka_nan_on()) {   // DM_VK_NANSCAN: all-zero blocks of ASTC textures (an all-zero ASTC block is an error block)
+                 uint64_t zb = 0, nb = piece / 16; for (uint64_t k = 0; k < nb; k++) if (!mem_any(s.ptr + 16 * k, 16)) zb++;
+                 const char *dm = getenv("DM_VK_NANSCAN_DUMP"); static _Atomic int nd;   // <format>x<w>: level 0 of such textures written to DM_TEMP (diagnostic, at most 64)
+@@ -2210,13 +2334,17 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+                 }
+                 static _Atomic int nz; if (zb && atomic_fetch_add(&nz, 1) < 64) VLOG("NaN scan: upload of serial %llu format %#x level %u layer %u: %llu of %llu blocks all zero (storage %p)", (unsigned long long)t->serial, d->format, lv, ly, (unsigned long long)zb, (unsigned long long)nb, (const void *)t->mem);
+             }
++            int whole = prev && astc_fill(im, s.ptr, lv, ly, prev[ly]);
++            uint64_t bad = astc_clean(f->vk, s.ptr, piece); astc_bad_note(t, lv + im->base, ly, bad, piece / 16);
++            if (prev) { free(prev[ly]); prev[ly] = whole && !bad && (prev[ly] = malloc(piece)) ? memcpy(prev[ly], s.ptr, piece) : NULL; }
++            if (astc_keep(im, lv, bad)) continue;
+             VkBufferImageCopy c = {s.off, bx * f->bw, by * f->bh, {im->aspect, lv, ly, 1}, {0, 0, 0}, {w, h, z}};
+             vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+             bytes += piece;
+-            if (!(cb = vka_up_point(cb))) { free(part); *nbytes = bytes; return; }
++            if (!(cb = vka_up_point(cb))) { free(part); prev_drop(prev, im->layers); *nbytes = bytes; return; }
+         }
+     }
+-    free(part);
++    free(part); prev_drop(prev, im->layers);
+     *nbytes = bytes;
+     static _Atomic int n; if (atomic_fetch_add(&n, 1) < 4) VLOG("texture serial %llu %ux%u format %#x: %llu bytes uploaded from guest memory", (unsigned long long)t->serial, im->w, im->h, d->format, (unsigned long long)bytes);
+ }
+@@ -2739,7 +2867,7 @@ static int img_storage_upgrade(vka_img *im, VkCommandBuffer cb, VkFormat need) {
+     vk.vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, n->img, VK_IMAGE_LAYOUT_GENERAL, nc, c);
+     vka_barrier(cb);
+     VkImage oi = im->img; vka_imem od = im->m; void *ov = im->views; uint64_t ob = im->bytes;
+-    im->img = n->img; im->m = n->m; im->views = NULL; im->usage = n->usage; im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->bytes = n->bytes; im->fl = n->fl;   // (the new image's list whole: its learned formats too, need among them)
++    im->img = n->img; im->astc_whole = 0; im->m = n->m; im->views = NULL; im->usage = n->usage; im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->bytes = n->bytes; im->fl = n->fl;   // (the new image's list whole: its learned formats too, need among them)
+     n->img = oi; n->m = od; n->views = ov; n->bytes = ob; g_img_bytes -= ob;
+     if (im->holds) { n->zold = im->zold; im->zold = n; }
+     else vka_after(vka_fence_last() + 1, img_destroy, n);
+@@ -3215,6 +3343,33 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+     }
+     g_nreg_writes = 0;
+     if (any_rw) vka_barrier(cb);
++    // Watched textures (watch_add): storage read again every 64th prepare (about a quarter second), uploaded again when it changed
++    static uint64_t wtick;
++    if (g_nwatch && !(++wtick & 63)) {
++        int up = 0;
++        for (int i = 0; i < g_nwatch; i++) {
++            smap_ent *e = map_get(g_watch[i].serial); vka_img *im = e ? e->im : NULL;
++            if (!im || !im->mem || im->vpool) { static int ng; if (ng++ < 16) VLOG("ASTC watch: texture serial %llu: gone or without storage", (unsigned long long)g_watch[i].serial); g_watch[i--] = g_watch[--g_nwatch]; continue; }
++            if (im->gpu_owned) { if (!g_watch[i].gpu_logged++) VLOG("ASTC watch: texture serial %llu: its content is the GPU's (a copy or draw wrote it), not read from storage", (unsigned long long)im->serial); continue; }
++            if (dm_guest_unmapped((uintptr_t)im->mem, im->L.size)) continue;
++            if (!g_watch[i].viewed) {   // its first 256 bytes as the GPU reads them, against the CPU's ("NaN scan: watch:" line)
++                g_watch[i].viewed = 1; VkBuffer vb; VkDeviceSize vo;
++                if (vka_addr((uint64_t)(uintptr_t)im->mem, 256, &vb, &vo, NULL)) gview(cb, im);
++                else { static int nv; if (nv++ < 16) VLOG("ASTC watch: texture serial %llu: its storage %p has no GPU address (not placed memory)", (unsigned long long)im->serial, (const void *)im->mem); }
++            }
++            uint64_t h = mem_hash(im->mem, im->L.size);
++            if (h == g_watch[i].hash) continue;
++            int first = !g_watch[i].hash; g_watch[i].hash = h;
++            uint64_t b0 = g_bad_total;
++            tex_t t = {0}; t.serial = im->serial; t.d = im->d; t.L = im->L; t.mem = (uint8_t *)im->mem;
++            upload_tracked(im, &t, cb); up = 1;
++            uint64_t nb = g_bad_total - b0; static int nw;
++            if (nw++ < 96) VLOG("ASTC watch: texture serial %llu %ux%u format %#x: storage %s, uploaded again: %s (frame %llu)", (unsigned long long)im->serial, im->d.width, im->d.height,
++                                im->d.format, first ? "read after its first upload" : "changed", nb ? "still not ASTC data" : "ASTC data now", (unsigned long long)vka_frame());
++            if (!nb) g_watch[i--] = g_watch[--g_nwatch];
++        }
++        if (up) vka_barrier(cb);
++    }
+     // GPU writes whose submission is done: the images over them that did not get their bytes are uploaded again (see gw_t above)
+     gml_poll();
+     if (vka_nan_on()) watch_scan(cb);
+@@ -3250,6 +3405,8 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+             while (lo < hi) { int m = (lo + hi) / 2; if ((uint64_t)(uintptr_t)by[m]->mem < w->hi) lo = m + 1; else hi = m; }
+             for (int j = lo - 1; j >= 0 && (uint64_t)(uintptr_t)by[j]->mem + maxsz > w->lo; j--) {
+                 vka_img *im = by[j]; uint64_t a = (uint64_t)(uintptr_t)im->mem;
++                if (w->lo < a + im->L.size && w->hi > a && g_nwatch && watched(im->serial)) { static int nwl; if (nwl++ < 48) VLOG("ASTC watch: texture serial %llu: a GPU %s into its storage at %+lld, %#llx bytes (from %#llx), done", (unsigned long long)im->serial,
++                    w->kind == GW_COPY ? "copy" : w->kind == GW_FILL ? "fill" : w->kind == GW_UPDATE ? "inline update" : "store", (long long)(w->lo - a), (unsigned long long)(w->hi - w->lo), (unsigned long long)w->src); }
+                 if (w->lo >= a + im->L.size || im->gw_seen >= w->seq || im->gpu_owned) continue;
+                 if (keep && !GW_TAKES(im)) continue;
+                 tex_t t = {0}; t.serial = im->serial; t.d = im->d; t.L = im->L; t.mem = (uint8_t *)im->mem;
