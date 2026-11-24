@@ -1,0 +1,32 @@
+# Builds LoopNative's portable core (src/loopnative) on its own and runs its tests, with the
+# address and undefined-behaviour sanitizers. Takes under a minute, unlike the APK build.
+name: loopnative-core
+
+on:
+  push:
+    paths:
+      - "src/loopnative/**"
+      - ".github/workflows/loopnative-core.yml"
+  pull_request:
+    paths:
+      - "src/loopnative/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: LoopNative core tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S src/loopnative -B build/loopnative -G "Unix Makefiles"
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build/loopnative -j
+      - name: Test
+        run: ctest --test-dir build/loopnative --output-on-failure

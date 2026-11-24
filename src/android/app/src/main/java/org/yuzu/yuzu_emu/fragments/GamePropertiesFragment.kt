@@ -347,39 +347,29 @@ class GamePropertiesFragment : Fragment() {
                 if (GameEngine.gameOptions(args.game).isNotEmpty()) {
                     add(
                         SubmenuProperty(
-                            R.string.banana_options,
-                            R.string.banana_options_description,
+                            R.string.loopnative_options,
+                            R.string.loopnative_options_description,
                             R.drawable.ic_settings,
                             details = { describeGameOptions() },
                             action = { showGameOptionsDialog() }
                         )
                     )
                 }
-                if (GameEngine.isBananaAvailable) {
-                    add(
-                        SubmenuProperty(
-                            R.string.banana_pack_import,
-                            R.string.banana_pack_import_description,
-                            R.drawable.ic_import,
-                            action = { importBananaPack.launch(arrayOf("application/zip", "application/octet-stream")) }
-                        )
-                    )
-                    add(
-                        SubmenuProperty(
-                            R.string.banana_shaders_build,
-                            R.string.banana_shaders_build_description,
-                            R.drawable.ic_build,
-                            action = {
-                                val navController = binding.root.findNavController()
-                                GameEngine.prepareNativeShaders(requireActivity(), args.game) {
-                                    navController.navigate(
-                                        HomeNavigationDirections.actionGlobalEmulationActivity(args.game, true)
-                                    )
-                                }
+                add(
+                    SubmenuProperty(
+                        R.string.loopnative_report,
+                        R.string.loopnative_report_description,
+                        R.drawable.ic_build,
+                        action = {
+                            val navController = binding.root.findNavController()
+                            GameEngine.showNativeReport(requireActivity(), args.game) {
+                                navController.navigate(
+                                    HomeNavigationDirections.actionGlobalEmulationActivity(args.game, true)
+                                )
                             }
-                        )
+                        }
                     )
-                }
+                )
             }
 
             if (!args.game.isHomebrew) {
@@ -828,52 +818,16 @@ class GamePropertiesFragment : Fragment() {
         }
     }
 
-    /** A pack that Banana Native's own app exported (Manage › Export pack…), into Hokkaido's packs. */
-    private val importBananaPack = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { result ->
-        if (result == null) {
-            return@registerForActivityResult
-        }
-        val context = requireContext()
-        val working = com.google.android.material.dialog.MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.banana_pack_import)
-            .setMessage(R.string.banana_pack_import_working)
-            .setCancelable(false)
-            .show()
-        viewLifecycleOwner.lifecycleScope.launch {
-            val error = withContext(Dispatchers.IO) {
-                runCatching { GameEngine.importPack(context, args.game, result) }
-                    .getOrElse { it.message ?: it.toString() }
-            }
-            working.dismiss()
-            if (!isAdded) {
-                return@launch
-            }
-            com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
-                .setTitle(
-                    if (error == null) R.string.banana_pack_import_done
-                    else R.string.banana_pack_import_failed
-                )
-                .setMessage(
-                    if (error == null) getString(R.string.banana_pack_import_done_message, args.game.title)
-                    else getString(R.string.banana_pack_import_failed_message, error)
-                )
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
-        }
-    }
-
     private fun describeGameOptions(): String =
         GameEngine.gameOptions(args.game).joinToString(" · ") {
             getString(
-                if (GameEngine.gameOption(requireContext(), args.game, it)) R.string.banana_option_on
-                else R.string.banana_option_off,
+                if (GameEngine.gameOption(requireContext(), args.game, it)) R.string.loopnative_option_on
+                else R.string.loopnative_option_off,
                 getString(it.title)
             )
         }
 
-    /** Banana Native's game options (full vegetation, RAM saver, soft textures); they apply at the next start. */
+    /** LoopNative's game options (storage-backed memory, governor, own settings); they apply at the next start. */
     private fun showGameOptionsDialog() {
         val options = GameEngine.gameOptions(args.game)
         val names = options.map { option ->
@@ -889,10 +843,9 @@ class GamePropertiesFragment : Fragment() {
         }.toTypedArray<CharSequence>()
         val checked = options.map { GameEngine.gameOption(requireContext(), args.game, it) }.toBooleanArray()
         com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
-            .setTitle(R.string.banana_options)
+            .setTitle(R.string.loopnative_options)
             .setMultiChoiceItems(names, checked) { dialog, which, on ->
                 GameEngine.setGameOption(requireContext(), args.game, options[which], on)
-                // One switch can change another (Strong includes the RAM saver)
                 val list = (dialog as androidx.appcompat.app.AlertDialog).listView
                 options.forEachIndexed { index, option ->
                     list.setItemChecked(index, GameEngine.gameOption(requireContext(), args.game, option))
@@ -907,15 +860,14 @@ class GamePropertiesFragment : Fragment() {
         val choices = GameEngine.Choice.entries
         val names = choices.map {
             when (it) {
-                GameEngine.Choice.AUTO -> GameEngine.run {
-                    getString(
-                        R.string.game_engine_auto_now,
-                        getString(
-                            if (autoIsNative(args.game)) R.string.game_engine_native
-                            else R.string.game_engine_emulate
-                        )
-                    )
-                }
+                GameEngine.Choice.AUTO -> getString(
+                    R.string.game_engine_auto_now,
+                    if (GameEngine.autoIsNative(requireContext(), args.game)) {
+                        GameEngine.nativeName(requireContext(), args.game)
+                    } else {
+                        getString(R.string.game_engine_emulate)
+                    }
+                )
                 GameEngine.Choice.EMULATE -> getString(R.string.game_engine_emulate)
                 GameEngine.Choice.NATIVE -> GameEngine.nativeName(requireContext(), args.game)
             }

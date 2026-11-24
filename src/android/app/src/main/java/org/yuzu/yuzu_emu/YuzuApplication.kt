@@ -21,7 +21,6 @@ import android.os.LocaleList
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.utils.DirectoryInitialization
 import org.yuzu.yuzu_emu.utils.DocumentsTree
-import org.yuzu.yuzu_emu.utils.GameEngine
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
 import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.PowerStateUpdater
@@ -60,12 +59,6 @@ class YuzuApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Banana Native runs its game, packer and checks in processes of its own: those get only its
-        // setup, none of the emulator's.
-        GameEngine.installEmbedded(this)
-        if (GameEngine.isEmbeddedProcess()) {
-            return
-        }
         application = this
         documentsTree = DocumentsTree()
         DirectoryInitialization.start()

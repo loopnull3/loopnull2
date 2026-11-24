@@ -64,7 +64,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.lichii.android"
+        applicationId = "dev.loopnull.loopnative"
         minSdk = 24
         targetSdk = 36
         versionName = getGitVersion()
@@ -190,8 +190,8 @@ android {
             isDefault = true
             minSdk = 33
 
-            manifestPlaceholders += mapOf("appNameBase" to "Hokkaido")
-            resValue("string", "app_name_suffixed", "Hokkaido")
+            manifestPlaceholders += mapOf("appNameBase" to "LoopNative")
+            resValue("string", "app_name_suffixed", "LoopNative")
 
             ndk {
                 abiFilters += listOf("arm64-v8a")
@@ -331,8 +331,6 @@ play {
 }
 
 dependencies {
-    // Banana Native, the per-game "Banana Native" engine (GameEngine): the mainline flavor only (Android 13+).
-    "mainlineImplementation"(project(":banana"))
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.recyclerview:recyclerview:1.4.0")

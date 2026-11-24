@@ -82,6 +82,8 @@ import org.yuzu.yuzu_emu.features.settings.model.ShortSetting
 import org.yuzu.yuzu_emu.features.settings.utils.SettingsFile
 import org.yuzu.yuzu_emu.model.DriverViewModel
 import org.yuzu.yuzu_emu.model.EmulationViewModel
+import org.yuzu.yuzu_emu.loopnative.LoopNativeGovernor
+import org.yuzu.yuzu_emu.loopnative.LoopNativeSession
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.overlay.model.OverlayControl
 import org.yuzu.yuzu_emu.overlay.model.OverlayLayout
@@ -142,6 +144,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var intentGame: Game? = null
     private var isCustomSettingsIntent = false
     private var isStoppingForRomSwap = false
+    private var loopNativeGovernor: LoopNativeGovernor? = null
     private var deferGameSetupUntilStopCompletes = false
 
     private var perfStatsRunnable: Runnable? = null
@@ -362,10 +365,41 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             Log.warning("[EmulationFragment] Failed to load Freedreno config: ${e.message}")
         }
 
+        startLoopNative()
+
         emulationState = EmulationState(game!!.path) {
             return@EmulationState driverViewModel.isInteractionAllowed.value &&
                 !isStoppingForRomSwap
         }
+    }
+
+    /**
+     * LoopNative: takes the session the launcher armed for this game (its settings, guest memory on
+     * storage) before the core boots it, and starts the thermal governor.
+     */
+    private fun startLoopNative() {
+        val request = runCatching { LoopNativeSession.begin(requireContext(), game) }
+            .onFailure { Log.warning("[LoopNative] Session: ${it.message}") }
+            .getOrNull()
+        if (request == null) {
+            loopNativeGovernor?.stop()
+            loopNativeGovernor = null
+            return
+        }
+        if (request.governor && loopNativeGovernor == null) {
+            loopNativeGovernor = LoopNativeGovernor(requireContext()).also {
+                it.start(lifecycleScope, request.plan.startFpsLimit)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        loopNativeGovernor?.stop()
+        loopNativeGovernor = null
+        if (activity?.isFinishing != false) {
+            LoopNativeSession.end()
+        }
+        super.onDestroy()
     }
 
     /**

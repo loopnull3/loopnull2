@@ -740,4 +740,46 @@
     <!-- Licenses screen strings -->
     <string name="licenses">라이센스</string>
     <string name="license_fidelityfx_fsr_description">AMD 고품질 업스케일링</string>
-    </resources>
+
+    <!-- LoopNative -->
+    <string name="game_engine">엔진</string>
+    <string name="game_engine_description">이 게임을 실행할 엔진: Hokkaido는 사용자 설정 그대로 실행하고, LoopNative는 이 휴대폰(우선 갤럭시 Z 플립5)에 맞춰 실행합니다. 게임별 해상도·메모리 설정, 휴대폰 RAM보다 큰 게임의 메모리를 저장소에 두기, 과열 전에 프레임을 낮추는 거버너가 포함됩니다. 자동은 프로필이 있는 게임과 8GB 휴대폰에서 LoopNative를 고릅니다.</string>
+    <string name="game_engine_auto">자동</string>
+    <string name="game_engine_auto_now">자동 (%1$s)</string>
+    <string name="game_engine_native_generic">LoopNative (휴대폰 튜닝)</string>
+    <string name="game_engine_play_here">Hokkaido로 플레이</string>
+    <string name="loopnative_options">LoopNative 옵션</string>
+    <string name="loopnative_options_description">저장소 기반 게스트 메모리, 발열 거버너, 이 게임의 내 설정 유지. 다음 실행부터 적용됩니다.</string>
+    <string name="loopnative_option_on">%1$s 켜짐</string>
+    <string name="loopnative_option_off">%1$s 꺼짐</string>
+    <string name="loopnative_option_storage_memory">게스트 메모리를 저장소에</string>
+    <string name="loopnative_option_storage_memory_description">게임 메모리를 RAM 대신 내장 저장소의 파일에 둡니다. 휴대폰 RAM보다 많은 메모리를 쓰는 게임을 Android가 강제 종료하지 않게 합니다. 저장소 쓰기가 생기고, 메모리를 다시 읽어올 때 끊길 수 있습니다. 여유 공간 약 10GB가 필요합니다. RAM보다 큰 게임은 기본으로 켜집니다.</string>
+    <string name="loopnative_option_governor">발열 거버너</string>
+    <string name="loopnative_option_governor_description">휴대폰이 스스로 클럭을 낮추기 전에 30fps로 제한하고(매우 뜨거우면 한 프레임씩 건너뜀), 식으면 제한을 풉니다.</string>
+    <string name="loopnative_option_keep_settings">내 설정 유지</string>
+    <string name="loopnative_option_keep_settings_description">LoopNative 튜닝(해상도, 정확도, 메모리 사용) 대신 이 게임의 내 설정으로 시작합니다.</string>
+    <string name="loopnative_report">LoopNative 리포트</string>
+    <string name="loopnative_report_description">게임 코드를 다시 읽고(Prepare) 이 휴대폰에서 LoopNative가 어떻게 실행하는지 보여줍니다.</string>
+    <string name="loopnative_preparing_title">%1$s 준비 중</string>
+    <string name="loopnative_preparing_description">LoopNative가 게임 코드를 한 번 읽습니다: 모듈, 시스템 호출, 그래픽 진입점. 몇 초 걸립니다.</string>
+    <string name="loopnative_ready_title">LoopNative의 %1$s</string>
+    <string name="loopnative_play">플레이</string>
+    <string name="loopnative_close">닫기</string>
+    <string name="loopnative_prepare_failed">준비 실패</string>
+    <string name="loopnative_start_failed">LoopNative를 시작할 수 없음</string>
+    <string name="loopnative_report_device">휴대폰: %1$s, 게임에 쓸 수 있는 메모리 약 %2$s GB</string>
+    <string name="loopnative_report_memory">메모리: 이 게임은 약 %1$s GB를 씁니다. %2$s</string>
+    <string name="loopnative_fit_fits">RAM에 들어갑니다.</string>
+    <string name="loopnative_fit_tight">빠듯합니다: 저장소 기반 게스트 메모리가 공간을 만듭니다.</string>
+    <string name="loopnative_fit_unlikely">이 휴대폰이 줄 수 있는 것보다 많습니다: 저장소 기반 메모리를 켜도 가끔 Android가 게임을 종료할 수 있습니다.</string>
+    <string name="loopnative_report_no_profile">이 게임의 LoopNative 프로필이 아직 없습니다: 휴대폰 기본 튜닝으로 시작합니다.</string>
+    <string name="loopnative_report_storage_on">게스트 메모리: 저장소</string>
+    <string name="loopnative_report_storage_off">게스트 메모리: RAM</string>
+    <string name="loopnative_report_turnip">드라이버: Adreno에서는 Mesa Turnip을 권장합니다 (설정 › GPU 드라이버 관리자).</string>
+    <string name="loopnative_report_modules">코드: 모듈 %2$d개 중 %1$d개 읽음, 가로챌 명령어 %3$d개 (시스템 호출 %4$d개).</string>
+    <string name="loopnative_report_nvn">그래픽 진입점(nvnBootstrapLoader): %1$s</string>
+    <string name="loopnative_thermal_capped">LoopNative: 휴대폰이 뜨거워 30fps로 제한</string>
+    <string name="loopnative_thermal_skipping">LoopNative: 휴대폰이 매우 뜨거워 한 프레임씩 건너뜀</string>
+    <string name="loopnative_thermal_full">LoopNative: 식었으므로 프레임 제한 해제</string>
+    <string name="loopnative_memory_critical">LoopNative: 메모리가 거의 찼습니다. 다른 앱을 닫거나 이 게임의 "게스트 메모리를 저장소에"를 켜세요.</string>
+</resources>

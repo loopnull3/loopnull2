@@ -404,10 +404,7 @@ class InstallableFragment : Fragment() {
         }.show(parentFragmentManager, ProgressDialogFragment.TAG)
     }
 
-    /**
-     * A game's save folder, named by its title ID. Banana Native keeps a lock file and a staging folder
-     * (<title ID>.lock, <title ID>.work) beside each save folder it uses, which is Hokkaido's.
-     */
+    /** A game's save folder, named by its title ID. */
     private fun isTitleSaveFolder(file: File): Boolean =
         file.isDirectory && file.name.length == 16 && file.name.all { it.isDigit() || it.uppercaseChar() in 'A'..'F' }
 }

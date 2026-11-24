@@ -14,6 +14,7 @@ add_library(yuzu-android SHARED
     native_freedreno.cpp
     android_settings.cpp
     game_metadata.cpp
+    loopnative_jni.cpp
     native_log.cpp
     android_config.cpp
     android_config.h
@@ -23,7 +24,7 @@ add_library(yuzu-android SHARED
 
 set_property(TARGET yuzu-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})
 
-target_link_libraries(yuzu-android PRIVATE audio_core common core input_common frontend_common video_core)
+target_link_libraries(yuzu-android PRIVATE audio_core common core input_common frontend_common video_core loopnative)
 target_link_libraries(yuzu-android PRIVATE android camera2ndk EGL glad jnigraphics log GLESv2)
 if (ARCHITECTURE_arm64)
     target_link_libraries(yuzu-android PRIVATE adrenotools)

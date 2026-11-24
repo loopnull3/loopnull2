@@ -1,4 +1,4 @@
-# Builds the Hokkaido Android app (arm64 APK) on every push and on demand.
+# Builds the LoopNative Android app (arm64 APK) on every push and on demand.
 name: android
 
 on:
@@ -87,7 +87,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: hokkaido-android-${{ github.sha }}
+          name: loopnative-android-${{ github.sha }}
           path: artifacts/*.apk
           if-no-files-found: error
 
@@ -100,7 +100,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Hokkaido ${{ env.RELEASE_VERSION }}
+          name: LoopNative ${{ env.RELEASE_VERSION }}
           prerelease: false
           make_latest: true
           body_path: docs/android/RELEASE_NOTES.md
@@ -111,7 +111,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: Hokkaido test build
+          name: LoopNative test build
           prerelease: true
           make_latest: false
           body: Automatic test build from ${{ github.sha }}. Experimental.
@@ -129,7 +129,7 @@ jobs:
         with:
           tag_name: android-test-${{ env.TEST_NAME }}
           target_commitish: ${{ github.sha }}
-          name: "Hokkaido test: ${{ env.TEST_NAME }}"
+          name: "LoopNative test: ${{ env.TEST_NAME }}"
           prerelease: true
           make_latest: false
           body: Test build of branch ${{ github.ref_name }} at ${{ github.sha }}. For testing one fix; not a release.

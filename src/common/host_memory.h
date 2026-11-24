@@ -93,6 +93,15 @@ public:
         return address >= virtual_base && address < virtual_base + virtual_size;
     }
 
+    /// LoopNative: whether this memory lives in a file on storage rather than in RAM.
+    [[nodiscard]] bool IsStorageBacked() const noexcept {
+        return storage_backed;
+    }
+
+    /// LoopNative: whether new guest memory should live in a file on storage. The frontend sets
+    /// LOOPNATIVE_MEMORY_BACKING_DIR to a directory on internal storage before a game starts.
+    [[nodiscard]] static bool StorageBackingRequested();
+
 private:
     void Swap(HostMemory& other) noexcept;
 
@@ -126,6 +135,7 @@ private:
     size_t num_granules{};
     // Windows requires it for kernels whom lack proper support for some functions!
     bool fallback_buffer{false};
+    bool storage_backed{false};
 };
 
 } // namespace Common

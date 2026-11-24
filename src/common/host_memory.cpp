@@ -25,7 +25,10 @@
 #include "common/settings.h"
 
 #if defined(__linux__)
+#include <cstring>
+#include <string>
 #include <sys/random.h>
+#include <sys/statvfs.h>
 #elif defined(__APPLE__)
 #include <sys/types.h>
 #include <sys/random.h>
@@ -535,6 +538,64 @@ static int shm_open_anon(int flags, mode_t mode) {
 }
 #endif
 
+#if defined(__linux__)
+static const char* StorageBackingDir() {
+    const char* dir = std::getenv("LOOPNATIVE_MEMORY_BACKING_DIR");
+    return dir != nullptr && *dir != '\0' ? dir : nullptr;
+}
+
+// LoopNative: guest memory in a file on internal storage instead of a memfd, for phones with less
+// RAM than a game keeps in use (an 8 GB Galaxy Z Flip5 running a 12 GB Switch 2 game). A memfd's
+// pages can only go to zram, which itself takes RAM; a file's pages are written back to flash and
+// dropped, so Android reclaims them instead of closing the game. The file is unlinked at once and
+// stays sparse: only pages the guest writes take space, and PunchHole frees them again.
+static int OpenStorageBacking(size_t size) {
+    const char* dir = StorageBackingDir();
+    if (dir == nullptr) {
+        return -1;
+    }
+    struct statvfs volume {};
+    if (statvfs(dir, &volume) != 0) {
+        LOG_WARNING(Common_Memory, "LoopNative: {} is not usable for guest memory: {}", dir,
+                    strerror(errno));
+        return -1;
+    }
+    // A game seldom writes all of its memory; ask for what it plausibly will, plus room for the
+    // rest of the phone.
+    const u64 free_bytes = static_cast<u64>(volume.f_bavail) * volume.f_frsize;
+    const u64 wanted = std::min<u64>(size, u64{8} << 30) + (u64{2} << 30);
+    if (free_bytes < wanted) {
+        LOG_WARNING(Common_Memory,
+                    "LoopNative: {} MiB free in {}, guest memory needs {} MiB: keeping it in RAM",
+                    free_bytes >> 20, dir, wanted >> 20);
+        return -1;
+    }
+    int fd = -1;
+#ifdef O_TMPFILE
+    fd = open(dir, O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+#endif
+    if (fd < 0) {
+        std::string path = std::string(dir) + "/guest-memory-XXXXXX";
+        fd = mkstemp(path.data());
+        if (fd >= 0) {
+            unlink(path.c_str());
+        }
+    }
+    if (fd < 0) {
+        LOG_WARNING(Common_Memory, "LoopNative: could not create guest memory in {}: {}", dir,
+                    strerror(errno));
+        return -1;
+    }
+    LOG_INFO(Common_Memory, "LoopNative: {} MiB of guest memory backed by storage in {}",
+             size >> 20, dir);
+    return fd;
+}
+#else
+static int OpenStorageBacking(size_t) {
+    return -1;
+}
+#endif
+
 class HostMemory::Impl {
 public:
     explicit Impl(size_t backing_size_, size_t virtual_size_)
@@ -598,7 +659,11 @@ public:
             unlink(template_path);
         }
 #else
-        fd = memfd_create("HostMemory", 0);
+        fd = OpenStorageBacking(backing_size);
+        storage_backed = fd >= 0;
+        if (fd < 0) {
+            fd = memfd_create("HostMemory", 0);
+        }
 #endif
         bool use_anon = false;
         if (fd <= 0) {
@@ -617,9 +682,10 @@ public:
             LOG_WARNING(Common_Memory, "Using private mappings instead of shared ones");
             backing_base = static_cast<u8*>(mmap(nullptr, backing_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NOCORE, -1, 0));
             if (fd > 0) {
-                fd = -1;
                 close(fd);
+                fd = -1;
             }
+            storage_backed = false;
         } else {
             backing_base = static_cast<u8*>(mmap(nullptr, backing_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NOCORE, fd, 0));
         }
@@ -789,6 +855,8 @@ public:
     u8* backing_base{reinterpret_cast<u8*>(MAP_FAILED)};
     u8* virtual_base{reinterpret_cast<u8*>(MAP_FAILED)};
     u8* virtual_map_base{reinterpret_cast<u8*>(MAP_FAILED)};
+
+    bool storage_backed{}; ///< fd is a file on storage (LoopNative), not a memfd
 
 private:
     /// Release all resources in the object
@@ -962,6 +1030,7 @@ HostMemory::HostMemory(size_t backing_size_, size_t virtual_size_)
     if (impl->Init()) {
         backing_base = impl->backing_base;
         virtual_base = impl->virtual_base;
+        storage_backed = impl->storage_backed;
         if (virtual_base) {
             // Ensure the virtual base is aligned to the L2 block size.
             virtual_base = reinterpret_cast<u8*>(Common::AlignUp(uintptr_t(virtual_base), HugePageSize));
@@ -1011,6 +1080,15 @@ void HostMemory::Swap(HostMemory& other) noexcept {
     std::swap(granules, other.granules);
     std::swap(num_granules, other.num_granules);
     std::swap(fallback_buffer, other.fallback_buffer);
+    std::swap(storage_backed, other.storage_backed);
+}
+
+bool HostMemory::StorageBackingRequested() {
+#if defined(__linux__)
+    return StorageBackingDir() != nullptr;
+#else
+    return false;
+#endif
 }
 
 void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length, MemoryPermission perms, bool separate_heap) {

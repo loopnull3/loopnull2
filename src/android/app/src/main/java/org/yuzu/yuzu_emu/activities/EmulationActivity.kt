@@ -268,11 +268,12 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     /**
-     * A shortcut starts a game here with only its file (no game argument). A game whose engine is Banana
-     * Native goes to Hokkaido's home instead, which starts it through its engine (MainActivity).
+     * A shortcut starts a game here with only its file (no game argument). A game whose engine is
+     * LoopNative goes to the home screen instead, which prepares and starts it through its engine
+     * (MainActivity).
      */
     private fun handOffToEngine(): Boolean {
-        if (!GameEngine.isBananaAvailable || intent.action != Intent.ACTION_VIEW ||
+        if (intent.action != Intent.ACTION_VIEW ||
             intent.extras?.containsKey("game") == true
         ) {
             return false

@@ -351,6 +351,16 @@ struct System::Impl {
     SystemResultStatus InitializeKernel(System& system) {
         LOG_DEBUG(Core, "initialized OK");
 
+        // LoopNative chooses per game whether guest memory lives in RAM or in a file on storage
+        // (Common::HostMemory::StorageBackingRequested): memory made for the other kind is made
+        // again before the kernel starts on it.
+        if (device_memory.has_value() && device_memory->buffer.IsStorageBacked() !=
+                                             Common::HostMemory::StorageBackingRequested()) {
+            LOG_INFO(Core, "LoopNative: guest memory moves {}",
+                     Common::HostMemory::StorageBackingRequested() ? "to storage" : "back to RAM");
+            device_memory.reset();
+        }
+
         // ShutdownMainProcess releases it after a Switch 2 game; create it before the check below
         // so an empty slot alone does not rerun the full Initialize.
         if (!device_memory.has_value()) {
