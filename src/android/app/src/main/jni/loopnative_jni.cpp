@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -24,6 +25,7 @@
 #include "core/core.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
+#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs.h"
@@ -84,9 +86,26 @@ bool Decompress(LoopNative::NsoCodec codec, std::span<const u8> src, std::span<u
     return false;
 }
 
-/// The game's ExeFS (with its installed update applied), whatever container holds it.
+/// A NUP container's ExeFS, chosen as the loader does (core/loader/nup.cpp): the newest update's
+/// when it has one, else the base package's.
+FileSys::VirtualDir OpenNupExeFs(FileSys::NupContainer& nup) {
+    if (nup.GetStatus() != Loader::ResultStatus::Success) {
+        return nullptr;
+    }
+    const auto base = nup.FindBasePackage();
+    const auto update = nup.FindBestUpdatePackage();
+    if (update) {
+        if (auto exefs = nup.GetExeFSDir(*update)) {
+            return exefs;
+        }
+    }
+    return base ? nup.GetExeFSDir(*base) : nullptr;
+}
+
+/// The game's ExeFS (with its installed update applied), whatever container holds it. A NUP
+/// container is kept in `nup` for as long as its files are read.
 FileSys::VirtualDir OpenExeFs(Core::System& system, const std::string& path, u64 program_id,
-                              std::string& error) {
+                              std::unique_ptr<FileSys::NupContainer>& nup, std::string& error) {
     const auto file = Core::GetGameFileFromPath(system.GetFilesystem(), path);
     if (file == nullptr) {
         error = "the game file could not be opened";
@@ -109,6 +128,10 @@ FileSys::VirtualDir OpenExeFs(Core::System& system, const std::string& path, u64
         break;
     case Loader::FileType::DeconstructedRomDirectory:
         exefs = file->GetContainingDirectory();
+        break;
+    case Loader::FileType::NUP:
+        nup = std::make_unique<FileSys::NupContainer>(file);
+        exefs = OpenNupExeFs(*nup);
         break;
     default:
         error = "LoopNative cannot read this kind of game file";
@@ -237,8 +260,9 @@ jstring Java_org_yuzu_yuzu_1emu_loopnative_LoopNativeJni_prepare(JNIEnv* env, jo
     pack.title = Common::Android::GetJString(env, jtitle);
 
     std::string error;
+    std::unique_ptr<FileSys::NupContainer> nup;
     auto& system = EmulationSession::GetInstance().System();
-    const auto exefs = OpenExeFs(system, path, program_id, error);
+    const auto exefs = OpenExeFs(system, path, program_id, nup, error);
     if (exefs == nullptr) {
         LoopNative::NsoReport missing;
         missing.file_name = "exefs";
