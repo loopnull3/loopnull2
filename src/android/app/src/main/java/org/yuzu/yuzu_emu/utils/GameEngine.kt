@@ -86,6 +86,11 @@ object GameEngine {
             LoopNative.Option.KEEP_SETTINGS,
             R.string.loopnative_option_keep_settings,
             R.string.loopnative_option_keep_settings_description
+        ),
+        FRAME_GEN(
+            LoopNative.Option.FRAME_GEN,
+            R.string.loopnative_option_frame_gen,
+            R.string.loopnative_option_frame_gen_description
         )
     }
 

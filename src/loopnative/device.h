@@ -23,6 +23,7 @@ struct DeviceInfo {
 enum class DeviceClass {
     GalaxyZFlip5,   ///< SM-F731*, b5q: Snapdragon 8 Gen 2 for Galaxy, Adreno 740, 8 GB
     GalaxyZFold5,   ///< SM-F946*, q5q: same SoC, 12 GB
+    GalaxyS26Exynos, ///< SM-S942*/SM-S947* with Exynos 2600: Xclipse 960 (AMD RDNA), 12 GB
     Snapdragon8Gen2, ///< any other SM8550 phone
     Adreno,         ///< other Adreno phones
     Xclipse,        ///< Samsung Exynos with an AMD RDNA GPU
@@ -50,6 +51,7 @@ struct DeviceTuning {
     RamTier ram_tier = RamTier::Gb8;
     GpuVendor gpu_vendor = GpuVendor::Other;
     bool turnip_driver = false;  ///< the renderer string names Mesa's Turnip
+    bool radv_driver = false;    ///< the renderer string names Mesa's RADV (a custom Xclipse build)
     std::string display_name;    ///< "Galaxy Z Flip5", or the model
 
     /// ResolutionSetup index (0 = 1/4x, 1 = 1/2x, 2 = 3/4x, 3 = 1x).
@@ -58,6 +60,12 @@ struct DeviceTuning {
     std::uint32_t start_fps_limit = 0;
     /// Recommend Mesa Turnip over the stock Qualcomm driver (BC textures, fewer driver bugs).
     bool recommend_turnip = false;
+    /// Recommend a custom Mesa RADV build over Samsung's own Xclipse driver (faster upstream).
+    bool recommend_radv = false;
+    /// Settings ScalingFilter for upscaling a below-1x render to the screen; -1 keeps the user's.
+    /// The GPU maker's own: AMD FSR on Xclipse, Qualcomm SGSR on Adreno. Sharper than bilinear
+    /// at a fraction of a 1x render's cost.
+    int upscale_filter = -1;
     /// RAM the app can count on for a game, leaving Android, the launcher and the GPU driver room.
     std::uint64_t usable_ram_bytes = 0;
 

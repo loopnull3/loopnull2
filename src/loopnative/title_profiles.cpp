@@ -71,6 +71,14 @@ constexpr std::array BANANZA_OVERRIDES{
     SettingOverride{"use_docked_mode", "0"},
 };
 
+// 12 GB phones (the Galaxy S26 with Exynos 2600 above all, Hokkaido's own test phone): a
+// 0.75x render where upstream reports the game running well there, then FSR to the screen
+// (DeviceTuning::upscale_filter). Ocarina of Time, Fire Emblem and Bananza stay at the 0.5x
+// upstream recommends on the S26.
+constexpr std::array THREE_QUARTER_RENDER{
+    SettingOverride{"resolution_setup", "2"},
+};
+
 constexpr std::array STAR_FOX_OVERRIDES{
     SettingOverride{"resolution_setup", "1"},
     SettingOverride{"use_asynchronous_shaders", "true"},
@@ -85,15 +93,16 @@ constexpr std::array TITLE_PROFILES{
                  "memory."},
     TitleProfile{0x0400C3F00006E000ULL, "Mario Kart World", 12.0f, false,
                  MARIO_KART_WORLD_OVERRIDES,
-                 "Its upstream preset plus 0.5x and the game's 30 fps mode."},
+                 "Its upstream preset plus 0.5x and the game's 30 fps mode.",
+                 THREE_QUARTER_RENDER},
     TitleProfile{0x0400A3A01EE4C000ULL, "Pokemon Pokopia", 4.5f, true, POKOPIA_OVERRIDES,
-                 "Reported playable on 8 GB phones."},
+                 "Reported playable on 8 GB phones.", THREE_QUARTER_RENDER},
     TitleProfile{0x04007EF01F8AE000ULL, "Fire Emblem: Fortune's Weave", 6.0f, false,
                  FIRE_EMBLEM_OVERRIDES, "Playable at 0.5x upstream."},
     TitleProfile{0x040074A01BF12000ULL, "Donkey Kong Bananza", 8.0f, false, BANANZA_OVERRIDES,
                  "Keeps 6-8 GB in use while playing."},
     TitleProfile{0x0400E88025B1A000ULL, "Star Fox", 6.0f, false, STAR_FOX_OVERRIDES,
-                 "Memory need not measured upstream; estimate."},
+                 "Memory need not measured upstream; estimate.", THREE_QUARTER_RENDER},
 };
 
 // Device defaults every LoopNative start gets before the title's own overrides.
@@ -114,6 +123,19 @@ void Override(SessionPlan& plan, std::string_view key, std::string_view value) {
     } else {
         plan.overrides.emplace_back(std::string(key), std::string(value));
     }
+}
+
+/// A render below 1x is upscaled to the screen with the phone's upscaler (FSR on Xclipse).
+void ApplyUpscaler(const DeviceTuning& tuning, SessionPlan& plan) {
+    if (tuning.upscale_filter < 0) {
+        return;
+    }
+    const auto resolution = std::ranges::find_if(
+        plan.overrides, [](const auto& entry) { return entry.first == "resolution_setup"; });
+    if (resolution == plan.overrides.end() || resolution->second == "3") {
+        return;
+    }
+    Override(plan, "scaling_filter", std::to_string(tuning.upscale_filter));
 }
 
 } // namespace
@@ -145,18 +167,25 @@ SessionPlan PlanSession(const DeviceTuning& tuning, std::uint64_t program_id) {
 
     plan.profile = FindTitleProfile(program_id);
     if (plan.profile == nullptr) {
+        ApplyUpscaler(tuning, plan);
         return plan;
     }
     for (const auto& entry : plan.profile->overrides) {
         Override(plan, entry.key, entry.value);
     }
-    // A phone with room to spare keeps the user's resolution: the profiles target 8 GB phones.
+    if (tuning.ram_tier == RamTier::Gb12 || tuning.ram_tier == RamTier::Gb16Plus) {
+        for (const auto& entry : plan.profile->high_tier_overrides) {
+            Override(plan, entry.key, entry.value);
+        }
+    }
+    // A phone with room to spare keeps the user's resolution: the profiles target 8-12 GB phones.
     if (tuning.ram_tier == RamTier::Gb16Plus) {
         std::erase_if(plan.overrides,
                       [](const auto& entry) { return entry.first == "resolution_setup"; });
     }
     plan.memory_fit = FitOf(plan.profile->ram_need_gib, tuning.usable_ram_bytes);
     plan.storage_backed_memory = plan.memory_fit != MemoryFit::Fits;
+    ApplyUpscaler(tuning, plan);
     return plan;
 }
 

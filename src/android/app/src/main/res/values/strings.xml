@@ -1154,7 +1154,7 @@
     <string name="frames_ahead">Present a frame ahead</string>
     <string name="frames_ahead_description">Switch 2 games: lets the game prepare the next frame while the GPU still draws the current one. Usually faster; a few games misbehave with it on. Auto picks per game as tested.</string>
     <string name="game_engine">Engine</string>
-    <string name="game_engine_description">Which engine runs this game: Hokkaido runs it with your settings; LoopNative starts it tuned for this phone (the Galaxy Z Flip5 first): resolution and memory settings for the game, its memory on storage when it needs more RAM than the phone has, and a governor that lowers the frame rate before the phone overheats. Auto picks LoopNative for the games it has a profile for, and on 8 GB phones.</string>
+    <string name="game_engine_description">Which engine runs this game: Hokkaido runs it with your settings; LoopNative starts it tuned for this phone (the Galaxy Z Flip5 first): resolution and memory settings for the game, its memory on storage when it needs more RAM than the phone has, and a governor that lowers the frame rate before the phone overheats. Tuned first for the Galaxy Z Flip5 and the Galaxy S26 with Exynos 2600. Auto picks LoopNative for the games it has a profile for, and on 8 GB phones.</string>
     <string name="game_engine_auto">Auto</string>
     <string name="game_engine_auto_now">Auto (%1$s)</string>
     <string name="game_engine_emulate">Hokkaido</string>
@@ -1171,6 +1171,8 @@
     <string name="loopnative_option_governor_description">Caps the game at 30 fps before the phone throttles itself (and skips every other frame when it gets very hot), then lifts the cap once it has cooled down.</string>
     <string name="loopnative_option_keep_settings">Keep my settings</string>
     <string name="loopnative_option_keep_settings_description">Start with your own settings for this game instead of LoopNative\'s tuning (resolution, accuracy, memory use).</string>
+    <string name="loopnative_option_frame_gen">Smooth motion (FSR 3 frame generation)</string>
+    <string name="loopnative_option_frame_gen_description">Shows a generated frame between every two the game draws, so a 30 fps game moves like 60. Adds a little input delay and can smear fast motion and on-screen text. Best on fast GPUs (Galaxy S26 Exynos).</string>
     <string name="loopnative_report">LoopNative report</string>
     <string name="loopnative_report_description">Reads the game\'s code again (Prepare) and shows how LoopNative runs it on this phone.</string>
     <string name="loopnative_preparing_title">Preparing %1$s</string>
@@ -1188,6 +1190,10 @@
     <string name="loopnative_report_no_profile">No LoopNative profile for this game yet: it starts with the phone\'s tuning.</string>
     <string name="loopnative_report_storage_on">Guest memory: on storage</string>
     <string name="loopnative_report_storage_off">Guest memory: in RAM</string>
+    <string name="loopnative_report_render">Picture: %1$s render</string>
+    <string name="loopnative_report_render_upscaled">Picture: %1$s render, upscaled to the screen with %2$s</string>
+    <string name="loopnative_report_radv">Driver: a custom Mesa RADV build is recommended on Xclipse; upstream measured it faster than Samsung\'s driver on the S26 (Settings › GPU driver manager).</string>
+    <string name="loopnative_report_frame_gen">Smooth motion: FSR 3 frame generation on</string>
     <string name="loopnative_report_turnip">Driver: Mesa Turnip is recommended on Adreno (Settings › GPU driver manager).</string>
     <string name="loopnative_report_modules">Code: %1$d of %2$d modules read; %3$d instructions to intercept (%4$d system calls).</string>
     <string name="loopnative_report_nvn">Graphics entry point (nvnBootstrapLoader) in %1$s.</string>

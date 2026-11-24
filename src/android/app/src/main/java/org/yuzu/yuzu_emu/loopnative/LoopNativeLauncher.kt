@@ -110,6 +110,23 @@ object LoopNativeLauncher {
         }
     }
 
+    /** "Picture: 0.5x render, upscaled with AMD FSR", or null when the session keeps the user's. */
+    private fun renderLine(activity: FragmentActivity, plan: LoopNative.Plan): String? {
+        val scale = when (plan.override("resolution_setup")) {
+            "0" -> "0.25x"
+            "1" -> "0.5x"
+            "2" -> "0.75x"
+            "3" -> "1x"
+            else -> return null
+        }
+        val upscaler = when (plan.override("scaling_filter")) {
+            "6" -> "AMD FSR"
+            "13" -> "Qualcomm SGSR"
+            else -> return activity.getString(R.string.loopnative_report_render, scale)
+        }
+        return activity.getString(R.string.loopnative_report_render_upscaled, scale, upscaler)
+    }
+
     /** The Prepare report: the phone, the game's memory against it, and what the ExeFS holds. */
     fun describe(
         activity: FragmentActivity,
@@ -153,8 +170,17 @@ object LoopNativeLauncher {
                 }
             )
         )
+        if (!LoopNative.option(activity, game, LoopNative.Option.KEEP_SETTINGS)) {
+            renderLine(activity, plan)?.let { appendLine(it) }
+        }
         if (plan.recommendTurnip) {
             appendLine(activity.getString(R.string.loopnative_report_turnip))
+        }
+        if (plan.recommendRadv) {
+            appendLine(activity.getString(R.string.loopnative_report_radv))
+        }
+        if (LoopNative.option(activity, game, LoopNative.Option.FRAME_GEN)) {
+            appendLine(activity.getString(R.string.loopnative_report_frame_gen))
         }
         if (summary != null) {
             appendLine()

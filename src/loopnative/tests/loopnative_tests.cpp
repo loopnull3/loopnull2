@@ -172,6 +172,101 @@ void TestProfiles() {
     CHECK(json.find("[\"scene_memory_cap\",\"2\"]") != std::string::npos);
 }
 
+DeviceInfo S26Exynos() {
+    DeviceInfo info;
+    info.manufacturer = "samsung";
+    info.model = "SM-S942N";
+    info.device = "s26";
+    info.soc_model = "s5e9965";
+    info.gpu_renderer = "Samsung Xclipse 960";
+    info.total_ram_bytes = GiB * 45 / 4; // what a 12 GB phone reports
+    info.sdk_int = 37;
+    return info;
+}
+
+void TestS26() {
+    const auto tuning = ClassifyDevice(S26Exynos());
+    CHECK(tuning.device_class == DeviceClass::GalaxyS26Exynos);
+    CHECK(tuning.display_name == "Galaxy S26 (Exynos 2600)");
+    CHECK(tuning.ram_tier == RamTier::Gb12);
+    CHECK(tuning.gpu_vendor == GpuVendor::Xclipse);
+    CHECK(tuning.recommend_radv);
+    CHECK(!tuning.recommend_turnip);
+    CHECK(tuning.upscale_filter == 6);
+    CHECK(tuning.headroom_step_down > 0.85f);
+    CHECK(tuning.cool_seconds_before_step_up == 30);
+
+    auto plus = S26Exynos();
+    plus.model = "SM-S947B";
+    CHECK(ClassifyDevice(plus).display_name == "Galaxy S26+ (Exynos 2600)");
+
+    // Before Vulkan names the GPU, the SoC alone makes it the S26 Exynos.
+    auto unnamed = S26Exynos();
+    unnamed.gpu_renderer.clear();
+    const auto early = ClassifyDevice(unnamed);
+    CHECK(early.device_class == DeviceClass::GalaxyS26Exynos);
+    CHECK(early.upscale_filter == 6);
+    CHECK(early.recommend_radv);
+
+    // A custom Mesa RADV build is what upstream recommends there.
+    auto radv = S26Exynos();
+    radv.gpu_renderer = "AMD RADV JUNO RADV-Xclipse-27.0.zip";
+    const auto with_radv = ClassifyDevice(radv);
+    CHECK(with_radv.radv_driver);
+    CHECK(!with_radv.recommend_radv);
+    CHECK(with_radv.gpu_vendor == GpuVendor::Xclipse);
+
+    // The Snapdragon S26 of other regions is not this class.
+    auto snapdragon = S26Exynos();
+    snapdragon.model = "SM-S942U";
+    snapdragon.soc_model = "SM8850";
+    snapdragon.gpu_renderer = "Adreno (TM) 840";
+    const auto us = ClassifyDevice(snapdragon);
+    CHECK(us.device_class == DeviceClass::Adreno);
+    CHECK(us.upscale_filter == 13);
+    CHECK(us.recommend_turnip);
+
+    // Ocarina of Time: upstream's 0.5x, FSR to the screen, guest memory on storage (it can run
+    // out of memory on 12 GB phones).
+    const auto ocarina = PlanSession(tuning, 0x0400486024DEC000ULL);
+    CHECK(HasOverride(ocarina, "resolution_setup", "1"));
+    CHECK(HasOverride(ocarina, "scaling_filter", "6"));
+    CHECK(ocarina.memory_fit == MemoryFit::Tight);
+    CHECK(ocarina.storage_backed_memory);
+
+    // Mario Kart World: 0.75x on 12 GB; FSR replaces the preset's ScaleForce; still 30 fps mode.
+    const auto kart = PlanSession(tuning, 0x0400C3F00006E000ULL);
+    CHECK(HasOverride(kart, "resolution_setup", "2"));
+    CHECK(HasOverride(kart, "scaling_filter", "6"));
+    CHECK(HasOverride(kart, "mkw_30fps", "true"));
+    CHECK(kart.memory_fit == MemoryFit::Tight);
+
+    const auto pokopia = PlanSession(tuning, 0x0400A3A01EE4C000ULL);
+    CHECK(HasOverride(pokopia, "resolution_setup", "2"));
+    CHECK(pokopia.memory_fit == MemoryFit::Fits);
+    CHECK(!pokopia.storage_backed_memory);
+
+    const auto emblem = PlanSession(tuning, 0x04007EF01F8AE000ULL);
+    CHECK(HasOverride(emblem, "resolution_setup", "1"));
+    CHECK(emblem.memory_fit == MemoryFit::Fits);
+
+    const auto unknown = PlanSession(tuning, 0x0100000000010000ULL);
+    CHECK(HasOverride(unknown, "resolution_setup", "1"));
+    CHECK(HasOverride(unknown, "scaling_filter", "6"));
+
+    const auto json = ToJson(tuning, kart);
+    CHECK(json.find("\"device_class\":\"galaxy_s26_exynos\"") != std::string::npos);
+    CHECK(json.find("\"recommend_radv\":true") != std::string::npos);
+    CHECK(json.find("\"upscale_filter\":6") != std::string::npos);
+
+    // The S26 caps later and lifts sooner than the Flip5.
+    ThermalGovernor governor(tuning, 0);
+    CHECK(governor.Update({0.0, 0.85f, ThermalNone}).level == ThermalLevel::Full);
+    CHECK(governor.Update({2.0, 0.91f, ThermalNone}).level == ThermalLevel::Capped30);
+    CHECK(governor.Update({10.0, 0.5f, ThermalNone}).level == ThermalLevel::Capped30);
+    CHECK(governor.Update({41.0, 0.5f, ThermalNone}).level == ThermalLevel::Full);
+}
+
 void TestProcParsing() {
     const auto info = ParseMemInfo("MemTotal:        7864320 kB\n"
                                    "MemFree:          102400 kB\n"
@@ -550,6 +645,7 @@ void TestNso() {
 int main() {
     TestDevice();
     TestProfiles();
+    TestS26();
     TestProcParsing();
     TestMemoryGovernor();
     TestThermalGovernor();

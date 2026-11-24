@@ -30,6 +30,7 @@ object LoopNative {
         val usableRamBytes: Long,
         val turnipDriver: Boolean,
         val recommendTurnip: Boolean,
+        val recommendRadv: Boolean,
         val profileName: String?,
         val ramNeedGib: Double?,
         val reportedOn8gb: Boolean,
@@ -40,6 +41,10 @@ object LoopNative {
         val overrides: List<Pair<String, String>>
     ) {
         val isFlip5 get() = deviceClass == "galaxy_z_flip5"
+        val isS26Exynos get() = deviceClass == "galaxy_s26_exynos"
+
+        /** The session's value for a setting, null when it keeps the user's. */
+        fun override(key: String): String? = overrides.firstOrNull { it.first == key }?.second
     }
 
     /** What Prepare found in a game's ExeFS (the pack manifest's summary). */
@@ -63,7 +68,10 @@ object LoopNative {
         GOVERNOR("governor"),
 
         /** Start with the user's own settings instead of LoopNative's tuning. Default: off. */
-        KEEP_SETTINGS("keep_settings")
+        KEEP_SETTINGS("keep_settings"),
+
+        /** FSR 3 frame generation: a drawn frame and a generated one in between. Default: off. */
+        FRAME_GEN("frame_gen")
     }
 
     @Volatile
@@ -124,6 +132,7 @@ object LoopNative {
             usableRamBytes = device.getLong("usable_ram_bytes"),
             turnipDriver = device.getBoolean("turnip_driver"),
             recommendTurnip = device.getBoolean("recommend_turnip"),
+            recommendRadv = device.optBoolean("recommend_radv"),
             profileName = profile?.getString("name"),
             ramNeedGib = profile?.getDouble("ram_need_gib"),
             reportedOn8gb = profile?.getBoolean("reported_on_8gb") ?: false,
@@ -161,6 +170,7 @@ object LoopNative {
                 runCatching { plan(context, game).storageBackedMemory }.getOrDefault(false)
             Option.GOVERNOR -> true
             Option.KEEP_SETTINGS -> false
+            Option.FRAME_GEN -> false
         }
     }
 

@@ -22,8 +22,22 @@ object LoopNativeSession {
         val plan: LoopNative.Plan,
         val storageMemory: Boolean,
         val governor: Boolean,
-        val keepSettings: Boolean
-    )
+        val keepSettings: Boolean,
+        val frameGen: Boolean
+    ) {
+        /** What the session sets: the plan's tuning (unless kept off) and frame generation. */
+        val settings: List<Pair<String, String>>
+            get() = buildList {
+                if (!keepSettings) {
+                    addAll(plan.overrides)
+                }
+                if (frameGen) {
+                    add("frame_gen" to "true")
+                    add("frame_gen_type" to "1") // FrameGenType::Fsr3
+                    add("frame_gen_multiplier" to "2")
+                }
+            }
+    }
 
     @Volatile
     private var pending: Request? = null
@@ -39,7 +53,8 @@ object LoopNativeSession {
             plan = plan,
             storageMemory = LoopNative.option(context, game, LoopNative.Option.STORAGE_MEMORY),
             governor = LoopNative.option(context, game, LoopNative.Option.GOVERNOR),
-            keepSettings = LoopNative.option(context, game, LoopNative.Option.KEEP_SETTINGS)
+            keepSettings = LoopNative.option(context, game, LoopNative.Option.KEEP_SETTINGS),
+            frameGen = LoopNative.option(context, game, LoopNative.Option.FRAME_GEN)
         )
     }
 
@@ -60,9 +75,10 @@ object LoopNativeSession {
             setMemoryBacking(null)
             return null
         }
-        if (!request.keepSettings && request.plan.overrides.isNotEmpty()) {
-            val keys = request.plan.overrides.map { it.first }.toTypedArray()
-            val values = request.plan.overrides.map { it.second }.toTypedArray()
+        val settings = request.settings
+        if (settings.isNotEmpty()) {
+            val keys = settings.map { it.first }.toTypedArray()
+            val values = settings.map { it.second }.toTypedArray()
             val applied = LoopNativeJni.applySession(keys, values)
             Log.info("[LoopNative] ${request.titleId}: $applied of ${keys.size} settings applied")
         }
@@ -74,10 +90,9 @@ object LoopNativeSession {
         val request = active
         active = null
         setMemoryBacking(null)
-        if (request != null && !request.keepSettings && request.plan.overrides.isNotEmpty()) {
-            runCatching {
-                LoopNativeJni.restoreSession(request.plan.overrides.map { it.first }.toTypedArray())
-            }
+        val settings = request?.settings.orEmpty()
+        if (settings.isNotEmpty()) {
+            runCatching { LoopNativeJni.restoreSession(settings.map { it.first }.toTypedArray()) }
         }
     }
 

@@ -1,7 +1,8 @@
 # LoopNative
 
 LoopNative is a Switch 2 engine for the **Samsung Galaxy Z Flip5** (SM-F731\*, Snapdragon 8 Gen 2
-for Galaxy, Adreno 740, 8 GB RAM), built on [Hokkaido](https://github.com/pavelgajdo/Hokkaido)
+for Galaxy, Adreno 740, 8 GB RAM) and the **Galaxy S26 / S26+ with Exynos 2600** (SM-S942\*,
+SM-S947\*, Xclipse 960, 12 GB), built on [Hokkaido](https://github.com/pavelgajdo/Hokkaido)
 android-0.7.1. It replaces Hokkaido's second engine, Banana Native, which this fork removes
 entirely: no prebuilt Banana Native libraries are downloaded or shipped.
 
@@ -16,8 +17,9 @@ heat through:
 
 | Part | Where | What it does |
 |---|---|---|
-| Device tuning | `src/loopnative/device.cpp` | Recognises the Flip5 (SM-F731\*, SCG23, SC-54D, codename `b5q`), the Fold5 and other SM8550 phones; RAM tier, usable RAM, resolution default, Turnip recommendation, thermal thresholds. |
-| Title profiles | `src/loopnative/title_profiles.cpp` | Per-game settings and memory estimates (Ocarina of Time, Mario Kart World, Pokopia, Fire Emblem, DK Bananza, Star Fox), and whether the game fits this phone's RAM. |
+| Device tuning | `src/loopnative/device.cpp` | Recognises the Flip5 (SM-F731\*, SCG23, SC-54D, codename `b5q`), the Fold5, other SM8550 phones and the S26 / S26+ with Exynos 2600 (by model and SoC, so the Snapdragon S26 is not mistaken for it); RAM tier, usable RAM, resolution default, the GPU maker's upscaler (AMD FSR on Xclipse, Qualcomm SGSR on Adreno), Turnip or RADV recommendation, thermal thresholds. |
+| Title profiles | `src/loopnative/title_profiles.cpp` | Per-game settings and memory estimates (Ocarina of Time, Mario Kart World, Pokopia, Fire Emblem, DK Bananza, Star Fox), with a 0.75x render on 12 GB phones where upstream reports allow it, and whether the game fits this phone's RAM. |
+| Smooth motion | `LoopNativeSession.kt` | Optional FSR 3 frame generation (Hokkaido's), per game, off by default. |
 | Storage-backed guest memory | `src/common/host_memory.cpp`, `src/core/core.cpp` | The guest's RAM in a sparse, unlinked file on internal storage instead of a memfd, so Android writes cold pages to flash instead of closing the game. Per game, on by default when the game's estimate exceeds the phone's RAM. |
 | Thermal governor | `src/loopnative/governor.cpp`, `LoopNativeGovernor.kt` | Reads `PowerManager.getThermalHeadroom` and the thermal status every 2 s; caps at 30 fps before the phone throttles, skips every other frame when very hot, lifts the cap after 60 s of cool. |
 | Memory governor | same | `/proc/meminfo`, PSI where readable, `ActivityManager.lowMemory`: warns before lmkd closes the game. |
@@ -30,7 +32,7 @@ every game on an 8 GB phone.
 
 ### Honest status
 
-- **Nothing here has run on a Flip5 yet.** The code compiles and the portable core has host tests
+- **Nothing here has run on a Flip5 or an S26 yet.** The code compiles and the portable core has host tests
   (`src/loopnative/tests`), but no game was booted with it on the phone it targets.
 - **Memory is the wall.** Upstream reports Ocarina of Time running out of memory on 12 GB phones
   and Mario Kart World needing a 16 GB phone. The Flip5 has 8 GB. Storage-backed guest memory is

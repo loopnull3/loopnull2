@@ -7,10 +7,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-# LoopNative - Switch 2 on the Galaxy Z Flip5
+# LoopNative - Switch 2 on the Galaxy Z Flip5 and Galaxy S26
 
 LoopNative is a Nintendo Switch 2 emulator for Android tuned for the **Samsung Galaxy Z Flip5**
-(Snapdragon 8 Gen 2 for Galaxy, Adreno 740, 8 GB RAM). It is a fork of
+(Snapdragon 8 Gen 2 for Galaxy, Adreno 740, 8 GB RAM) and the **Samsung Galaxy S26 / S26+ with
+Exynos 2600** (Xclipse 960, 12 GB). It is a fork of
 [Hokkaido](https://github.com/pavelgajdo/Hokkaido) android-0.7.1, which continues yuzu, Sudachi,
 Eden, Eglantine and Lichii.
 
@@ -44,7 +45,8 @@ Requirements: an arm64 phone with Android 13 or newer and Vulkan 1.3.
   for the games it has a profile for (Ocarina of Time, Mario Kart World, Pokémon Pokopia, Fire
   Emblem: Fortune's Weave, Donkey Kong Bananza, Star Fox) and for every game on an 8 GB phone.
 - **Options:** Game properties › **LoopNative options**: guest memory on storage, thermal
-  governor, keep my settings. **LoopNative report** runs Prepare again.
+  governor, keep my settings, smooth motion (FSR 3 frame generation, off by default).
+  **LoopNative report** runs Prepare again.
 
 ## Galaxy Z Flip5
 
@@ -67,6 +69,32 @@ Recommended on the Flip5:
   half (Hokkaido's foldable layout).
 - Close other apps first, and play on a cool phone: the Flip5 throttles within minutes under full
   GPU load.
+
+## Galaxy S26 (Exynos 2600)
+
+The S26 with Exynos 2600 is Hokkaido's own test phone, so here the upstream reports are about this
+very phone. LoopNative's S26 profile:
+
+- **Picture:** a 0.5x or 0.75x render (per game, below) upscaled to the screen with AMD FSR,
+  which suits the S26's AMD-based Xclipse GPU: sharp at a fraction of a 1x render's cost.
+- **GPU driver:** a custom Mesa RADV build is recommended; upstream measured it faster than
+  Samsung's own driver on the S26.
+- **Memory:** 12 GB. Ocarina of Time can still run out of memory there upstream, so its guest
+  memory goes on storage by default.
+- **Heat:** the S26 holds load far longer than a flip phone, so the governor caps later (forecast
+  0.90) and lifts the cap after 30 s of cool.
+- **Smooth motion (optional):** FSR 3 frame generation shows a generated frame between every two
+  drawn ones, so a 30 fps game moves like 60. Off by default: it adds a little input delay.
+
+| Game | Upstream on the S26 | LoopNative on the S26 |
+|---|---|---|
+| The Legend of Zelda: Ocarina of Time | Hokkaido engine: playable at 0.5x; 12 GB can run out of memory | 0.5x + FSR, guest memory on storage |
+| Mario Kart World | Hokkaido's own preset; Banana Native's profile asked for 16 GB | 0.75x + FSR, the game's 30 fps mode, guest memory on storage |
+| Pokémon Pokopia | Playable (slower on the S26 than on the S24) | 0.75x + FSR |
+| Fire Emblem: Fortune's Weave | Playable at 0.5x | 0.5x + FSR |
+
+"Without lag" is the goal, not a promise: shader builds the first time a scene appears, scene
+loads and, for the largest games, memory coming back from storage can still stutter.
 
 ## Reporting problems
 

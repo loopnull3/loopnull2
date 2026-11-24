@@ -39,6 +39,8 @@ struct TitleProfile {
     bool reported_on_8gb;
     std::span<const SettingOverride> overrides;
     std::string_view note;
+    /// On phones with 12 GB or more (Galaxy S26 Exynos, Fold5): what changes from `overrides`.
+    std::span<const SettingOverride> high_tier_overrides{};
 };
 
 /// What LoopNative starts one game with on one phone.

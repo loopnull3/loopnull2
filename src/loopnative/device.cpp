@@ -39,6 +39,18 @@ bool IsGalaxyZFold5(const DeviceInfo& info) {
            std::ranges::find(FOLD5_CARRIER_MODELS, model) != FOLD5_CARRIER_MODELS.end();
 }
 
+// Galaxy S26 / S26+ with Exynos 2600. The same models ship with Snapdragon in some regions:
+// those report an Adreno GPU and are not this class.
+bool IsGalaxyS26Exynos(const DeviceInfo& info, GpuVendor vendor) {
+    const auto model = Lower(info.model);
+    if (!StartsWith(model, "sm-s942") && !StartsWith(model, "sm-s947")) {
+        return false;
+    }
+    const auto soc = Lower(info.soc_model);
+    return vendor == GpuVendor::Xclipse || Contains(soc, "s5e9965") || Contains(soc, "2600") ||
+           Contains(soc, "exynos");
+}
+
 bool IsSnapdragon8Gen2(const DeviceInfo& info) {
     const auto soc = Lower(info.soc_model);
     return soc == "sm8550" || Contains(soc, "kalama");
@@ -90,6 +102,7 @@ DeviceTuning ClassifyDevice(const DeviceInfo& info) {
     tuning.ram_tier = RamTierOf(info.total_ram_bytes);
     tuning.gpu_vendor = GpuVendorOf(info.gpu_renderer);
     tuning.turnip_driver = Contains(Lower(info.gpu_renderer), "turnip");
+    tuning.radv_driver = Contains(Lower(info.gpu_renderer), "radv");
     tuning.display_name = info.model.empty() ? std::string{"Unknown phone"} : info.model;
 
     if (IsGalaxyZFlip5(info)) {
@@ -98,6 +111,10 @@ DeviceTuning ClassifyDevice(const DeviceInfo& info) {
     } else if (IsGalaxyZFold5(info)) {
         tuning.device_class = DeviceClass::GalaxyZFold5;
         tuning.display_name = "Galaxy Z Fold5";
+    } else if (IsGalaxyS26Exynos(info, tuning.gpu_vendor)) {
+        tuning.device_class = DeviceClass::GalaxyS26Exynos;
+        tuning.display_name = StartsWith(Lower(info.model), "sm-s947") ? "Galaxy S26+ (Exynos 2600)"
+                                                                       : "Galaxy S26 (Exynos 2600)";
     } else if (IsSnapdragon8Gen2(info)) {
         tuning.device_class = DeviceClass::Snapdragon8Gen2;
     } else {
@@ -141,6 +158,15 @@ DeviceTuning ClassifyDevice(const DeviceInfo& info) {
         info.total_ram_bytes > reserve ? info.total_ram_bytes - reserve : info.total_ram_bytes / 2;
 
     tuning.recommend_turnip = tuning.gpu_vendor == GpuVendor::Adreno && !tuning.turnip_driver;
+    // The S26 counts as Xclipse even before Vulkan has named its GPU (SoC and model only).
+    const bool xclipse = tuning.gpu_vendor == GpuVendor::Xclipse ||
+                         tuning.device_class == DeviceClass::GalaxyS26Exynos;
+    tuning.recommend_radv = xclipse && !tuning.radv_driver;
+    if (xclipse) {
+        tuning.upscale_filter = 6; // ScalingFilter::Fsr: AMD's upscaler on an AMD GPU
+    } else if (tuning.gpu_vendor == GpuVendor::Adreno) {
+        tuning.upscale_filter = 13; // ScalingFilter::Sgsr: Qualcomm's single-pass upscaler
+    }
 
     switch (tuning.device_class) {
     case DeviceClass::GalaxyZFlip5:
@@ -156,6 +182,13 @@ DeviceTuning ClassifyDevice(const DeviceInfo& info) {
         tuning.headroom_step_up = 0.65f;
         tuning.cool_seconds_before_step_up = 45;
         break;
+    case DeviceClass::GalaxyS26Exynos:
+        // A flagship slab with a large vapor chamber: it sustains load far longer than a flip
+        // phone, so the cap comes late and goes early.
+        tuning.headroom_step_down = 0.90f;
+        tuning.headroom_step_up = 0.70f;
+        tuning.cool_seconds_before_step_up = 30;
+        break;
     default:
         break;
     }
@@ -168,6 +201,8 @@ std::string_view ToString(DeviceClass device_class) {
         return "galaxy_z_flip5";
     case DeviceClass::GalaxyZFold5:
         return "galaxy_z_fold5";
+    case DeviceClass::GalaxyS26Exynos:
+        return "galaxy_s26_exynos";
     case DeviceClass::Snapdragon8Gen2:
         return "snapdragon_8_gen_2";
     case DeviceClass::Adreno:

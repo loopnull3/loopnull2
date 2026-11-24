@@ -18,6 +18,9 @@ void WriteTuning(JsonWriter& json, const DeviceTuning& tuning) {
     json.Key("usable_ram_bytes").Number(tuning.usable_ram_bytes);
     json.Key("turnip_driver").Bool(tuning.turnip_driver);
     json.Key("recommend_turnip").Bool(tuning.recommend_turnip);
+    json.Key("radv_driver").Bool(tuning.radv_driver);
+    json.Key("recommend_radv").Bool(tuning.recommend_radv);
+    json.Key("upscale_filter").Number(tuning.upscale_filter);
     json.Key("resolution_setup").Number(tuning.resolution_setup);
     json.Key("start_fps_limit").Number(tuning.start_fps_limit);
     json.Key("headroom_step_down").Number(static_cast<double>(tuning.headroom_step_down));
