@@ -69,26 +69,19 @@ a class below it for **8 GB phones** (the Galaxy Z Flip5), set once per game and
   at a quarter of RAM, textures without their two finest levels);
 - less vegetation and a render of 1280x720 at most.
 
-**Memory classes** (LoopNative Pack options › Memory class, on by default on phones of 12 GB or
-less): every game starts with what Banana Native's low-RAM profile keys do for the one game that
-has them (Fire Emblem, measured upstream on an 11 GiB Adreno 740 handheld, where it took the
-low-memory killer from 3 of 3 runs to 0 of 4).
+**Memory class** (LoopNative Pack options › Memory class, on by default on phones of 12 GB or
+less): every game's memory pools are placed in 256 MB parts instead of whole, as Banana Native's
+low-RAM profile key does for the one game that has it, and the texture cache is left to measure
+its own limit from the phone's free memory.
 
-| | 12 GB phones (Galaxy S26) | 8 GB phones (Galaxy Z Flip5) |
-|---|---|---|
-| Total memory the game is told (9 GB on the console) | 5.5 GB | 4 GB |
-| Memory pools placed in parts of | 256 MB | 256 MB |
-
-The texture cache is left to measure its own limit from the phone's free memory: a fixed small
-cache makes a game with many textures upload them again and again, which is stutter. The smaller
-report is what makes room for it.
+An earlier build also told the game it had 5.5 GB (12 GB phones) or 4 GB (8 GB phones) instead of
+9, so that it would keep smaller caches. That is gone: Mario Kart World sizes its heap from that
+number at startup and then takes one 7.04 GiB block from it, so it crashed at once on a Galaxy
+S26. The game needs the full report, which is why its profile asks for 14 GiB of RAM.
 
 With its memory class on, Auto lets a 12 GB phone start a game on the pack whose profile asks for
-more RAM (Mario Kart World: 14 GiB). This is an experiment: Banana Native itself, up to v0.3.51,
-still says Mario Kart World runs out of memory on 12 GB phones, and no one has run these values
-with that game. A game that needs more than it was told gets the full 9 GB back for the session,
-so the class cannot make a game fail to start; it may not be enough to keep it alive. On 8 GB
-phones Auto still starts such games on LoopNative; the pack can be chosen by hand.
+more RAM (Mario Kart World: 14 GiB): it starts, and Android may close it when memory runs short.
+On 8 GB phones Auto still starts such games on LoopNative; the pack can be chosen by hand.
 
 On the **Galaxy S26** the pack engine keeps what Hokkaido tuned on that very phone (Ocarina of
 Time: mesh draws through compute on RADV, Hold 60 fps, lighter textures and pools), and takes the

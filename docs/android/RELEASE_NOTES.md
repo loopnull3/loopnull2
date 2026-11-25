@@ -41,10 +41,9 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   256 MiB parts and a 1280x720 render from a game's first start.
 - **Shaders before the first start:** a prepared game without shaders asks once whether to build
   them all first, so its first sessions don't stutter while each shader is built.
-- **Memory classes** for 12 GB and 8 GB phones (LoopNative Pack options › Memory class): the game
-  is told it has 5.5 GB or 4 GB instead of 9 and memory pools are placed in 256 MB parts; the
-  texture cache keeps measuring its own limit. On a 12 GB phone Auto then starts games on the pack
-  whose profile asks for more RAM (Mario Kart World). Experimental.
+- **Memory class** for phones of 12 GB or less (LoopNative Pack options › Memory class): memory
+  pools are placed in 256 MB parts; the texture cache keeps measuring its own limit. On a 12 GB
+  phone Auto then starts games on the pack whose profile asks for more RAM (Mario Kart World).
 - **Auto by phone:** the pack only where the profile's required RAM fits and, on Xclipse, a RADV
   driver is installed; Ocarina of Time on the Galaxy S26 with RADV.
 - Game properties › **LoopNative Pack options**, **Import a Banana Native pack**, **Build all

@@ -16,7 +16,7 @@ public final class LoopNativeTuning {
     private LoopNativeTuning() {}
 
     /** Raised when the starting settings change, so a game takes the new ones once. */
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
     private static final long GIB = 1L << 30;
     /** An 8 GB phone reports about 7.3 to 7.6 GiB; a 12 GB one about 11. */
     private static final long EIGHT_GB_CLASS_MAX = GIB * 17 / 2;
@@ -47,23 +47,24 @@ public final class LoopNativeTuning {
     }
 
     /**
-     * The memory class: what a profile's low-RAM keys do (dm/games/README.md low_ram_place_part_mb,
-     * low_ram_img_cache_max_mb, low_ram_app_pool_mb), given to every game through the switches that override them.
-     * Upstream has the keys for one game, Fire Emblem Fortune's Weave, measured on an 11 GiB AYN Thor (Adreno 740,
-     * Turnip): pools of 256 MiB or more placed by parts, and 5632 MiB reported to the game as its total memory
-     * instead of 9216, so its SDK keeps smaller caches (the low-memory killer stopped it in 0 of 4 runs against 3 of
-     * 3). The 12 GB class takes those values. The 8 GB class reports 4096 MiB, which that game also ran with. Only
-     * the report changes: a game that comes within 64 MiB of the reported total gets the whole pool back for the
-     * session, so no map is refused (hle_svc.c reported_total).
+     * The memory class: a profile's low_ram_place_part_mb (dm/games/README.md), given to every game through the
+     * switch that overrides it. Memory pools of 256 MiB or more are placed by parts instead of whole; upstream
+     * measured the placed memory of Fire Emblem Fortune's Weave going from 887 to 553 MiB with it on an 11 GiB phone,
+     * and Hokkaido sets it for Ocarina of Time on phones of 12 GB or less.
      *
      * The texture cache keeps its measured limit (vka_texlimit.h): what the phone can hold now, the scene's working
      * set never taken back. A fixed DM_VK_IMG_LIMIT_MB replaces that guard too, and a limit under a game's working
-     * set uploads its textures again every frame (docs/reference/memory.md "Texture cache thrash"): the smaller
-     * report is what makes room for the cache instead.
+     * set uploads its textures again every frame (docs/reference/memory.md "Texture cache thrash").
+     *
+     * Not in the class: the smaller total memory a game is told (low_ram_app_pool_mb, DM_APP_POOL_MB), which earlier
+     * versions set to 5632 and 4096 MiB. A game sizes its heap from that total once, at startup, and Mario Kart World
+     * then takes one 7.04 GiB block from it: with 5632 MiB reported the heap was 3.97 GiB, the block was refused and
+     * the game crashed in nnMain (a write to 0x10 at main+0x5dd3ac, Galaxy S26). It fits from 8773 MiB up, so the
+     * report saves that game nothing. The key stays what upstream made it: a value measured for one game.
      */
-    private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB", "DM_APP_POOL_MB"};
-    private static final String[] TWELVE_GB_VALUES = {"256", "5632"};
-    private static final String[] EIGHT_GB_VALUES = {"256", "4096"};
+    private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB"};
+    private static final String[] TWELVE_GB_VALUES = {"256"};
+    private static final String[] EIGHT_GB_VALUES = {"256"};
     /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.45). */
     private static final String FIRE_EMBLEM = "04007EF01F8AE000";
 
@@ -86,6 +87,13 @@ public final class LoopNativeTuning {
                 : twelveGbClass(total) && !FIRE_EMBLEM.equalsIgnoreCase(id) ? TWELVE_GB_VALUES : null;
         // A phone above the classes, or a game with its own keys: nothing of LoopNative's stays set
         for (int i = 0; i < MEMORY_CLASS_ROWS.length; i++) AdvancedSettings.set(c, MEMORY_CLASS_ROWS[i], id, values == null ? null : values[i]);
+        dropReportedTotal(c, id);
+    }
+
+    /** The reported total versions 2 and 3 set (5632 or 4096 MiB) is taken back; a value the player set stays. */
+    private static void dropReportedTotal(Context c, String id) {
+        String total = AdvancedSettings.own(c, "DM_APP_POOL_MB", id);
+        if ("5632".equals(total) || "4096".equals(total)) AdvancedSettings.set(c, "DM_APP_POOL_MB", id, null);
     }
 
     /**
@@ -109,6 +117,7 @@ public final class LoopNativeTuning {
             String limit = AdvancedSettings.own(c, "DM_VK_IMG_LIMIT_MB", id);
             if ("1024".equals(limit) || "768".equals(limit)) AdvancedSettings.set(c, "DM_VK_IMG_LIMIT_MB", id, null);
         }
+        dropReportedTotal(c, id);
         if (memoryClass(c, id)) writeMemoryClass(c, id, true);
         Prefs.of(c).edit().putInt(key, VERSION).commit();
     }
