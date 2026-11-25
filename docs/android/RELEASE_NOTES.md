@@ -39,6 +39,10 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   into a pack, then runs the code natively with NVN on Vulkan.
 - **8 GB class** (Galaxy Z Flip5): RAM saver: Strong, less vegetation, memory pools placed in
   256 MiB parts and a 1280x720 render from a game's first start.
+- **Memory classes** for 12 GB and 8 GB phones (LoopNative Pack options › Memory class): the game
+  is told it has 5.5 GB or 4 GB instead of 9, the texture cache is held at 1 GB or 768 MB, and
+  memory pools are placed in 256 MB parts. On a 12 GB phone Auto then starts games on the pack
+  whose profile asks for more RAM (Mario Kart World). Experimental.
 - **Auto by phone:** the pack only where the profile's required RAM fits and, on Xclipse, a RADV
   driver is installed; Ocarina of Time on the Galaxy S26 with RADV.
 - Game properties › **LoopNative Pack options**, **Import a Banana Native pack**, **Build all

@@ -58,6 +58,7 @@ patches, its native libraries from the pinned release) and changes it for these 
 | Change | Where | Why |
 |---|---|---|
 | 8 GB class | `LoopNativeTuning.java`, from `HokkaidoBridge.prepareStart` | Banana Native's lowest class is "12 GB or less". On 8 GB a game starts with RAM saver: Strong, less vegetation, pools placed in 256 MiB parts and a render of 1280x720 at most. Set once per game; the player's later changes stay. |
+| Memory classes | `LoopNativeTuning.writeMemoryClass` | Banana Native's low-RAM keys exist for one game. The 12 GB class gives every game that game's measured values through the switches that override the keys (`DM_APP_POOL_MB=5632`, `DM_VK_IMG_LIMIT_MB=1024`, `DM_VK_PLACE_PART_MB=256`); the 8 GB class reports 4096 MiB and holds the texture cache at 768 MiB. A per-game option, on by default on phones of 12 GB or less. Not yet run with Mario Kart World, which upstream still calls out of reach of 12 GB phones. |
 | Auto by phone | `GameEngine.autoIsPack` | The pack only where it can play: the profile's required RAM against the phone's, a RADV driver on Xclipse, and Ocarina of Time on the S26 (bring-up in its profile, playable there upstream). |
 | RAM requirement read from the profile | `LoopNativeTuning.requiredRamGib` | Banana Native measured them on its own engine (Mario Kart World 14 GiB, Bananza 10). |
 

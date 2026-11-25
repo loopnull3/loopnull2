@@ -357,7 +357,7 @@ class GamePropertiesFragment : Fragment() {
                     )
                 }
                 if (GameEngine.supportsPack(args.game)) {
-                    if (GameEngine.packOptions(args.game).isNotEmpty()) {
+                    if (GameEngine.packOptions(requireContext(), args.game).isNotEmpty()) {
                         add(
                             SubmenuProperty(
                                 R.string.banana_options,
@@ -935,7 +935,7 @@ class GamePropertiesFragment : Fragment() {
     }
 
     private fun describePackOptions(): String =
-        GameEngine.packOptions(args.game).joinToString(" · ") {
+        GameEngine.packOptions(requireContext(), args.game).joinToString(" · ") {
             getString(
                 if (GameEngine.packOption(requireContext(), args.game, it)) {
                     R.string.loopnative_option_on
@@ -948,7 +948,7 @@ class GamePropertiesFragment : Fragment() {
 
     /** The pack engine's game options (full vegetation, RAM saver, soft textures); they apply at the next start. */
     private fun showPackOptionsDialog() {
-        val options = GameEngine.packOptions(args.game)
+        val options = GameEngine.packOptions(requireContext(), args.game)
         val names = options.map { option ->
             val title = getString(option.title)
             android.text.SpannableString(title + "\n" + getString(option.description)).apply {

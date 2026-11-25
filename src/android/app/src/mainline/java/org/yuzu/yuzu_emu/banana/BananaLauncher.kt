@@ -51,6 +51,11 @@ class BananaLauncher : NativeEngineUi {
 
     override fun requiredRamGib(titleId: String): Double = HokkaidoBridge.requiredRamGib(titleId)
 
+    override fun lowMemoryPhone(context: Context): Boolean = HokkaidoBridge.lowMemoryPhone(context)
+
+    override fun memoryClassCovers(context: Context, titleId: String): Boolean =
+        HokkaidoBridge.memoryClassCovers(context, titleId)
+
     override fun importPack(context: Context, source: java.io.File, titleId: String, dumpPath: String?): String? =
         HokkaidoBridge.importPack(context, source, titleId, dumpPath)
 

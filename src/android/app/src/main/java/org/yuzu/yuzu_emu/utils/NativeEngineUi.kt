@@ -21,6 +21,12 @@ interface NativeEngineUi {
     /** The RAM in GiB Banana Native's profile calls required for a game, 0 when it names none. */
     fun requiredRamGib(titleId: String): Double
 
+    /** Whether this phone is in one of LoopNative's memory classes (12 GB or 8 GB). */
+    fun lowMemoryPhone(context: Context): Boolean
+
+    /** Whether the phone is in the 12 GB class and the game takes that class's memory settings. */
+    fun memoryClassCovers(context: Context, titleId: String): Boolean
+
     /** Closes Banana Native's game process when it holds this game. Blocks up to 3 s: call it off the main thread. */
     fun closeGame(context: Context, titleId: String)
 

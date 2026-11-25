@@ -770,6 +770,8 @@
     <string name="banana_option_ram_saver_strong_description">메모리를 더 줄입니다: 텍스처의 가장 세밀한 두 단계를 빼고, 텍스처 캐시를 줄이고, 백그라운드 파이프라인을 한 번에 하나만 만듭니다. RAM 절약을 포함합니다.</string>
     <string name="banana_option_soft_textures">부드러운 텍스처</string>
     <string name="banana_option_soft_textures_description">큰 텍스처를 낮은 해상도로 써서 메모리를 줄입니다. 가까이서 보면 텍스처가 흐릿합니다.</string>
+    <string name="loopnative_option_memory_class">메모리 등급 (12GB / 8GB 휴대폰)</string>
+    <string name="loopnative_option_memory_class_description">팩 엔진이 테스트된 16GB보다 작은 휴대폰에서 게임을 더 적은 메모리로 시작합니다. 게임에는 총 메모리를 9GB 대신 5.5GB(12GB 휴대폰) 또는 4GB(8GB 휴대폰)로 알려 캐시를 작게 잡게 하고, 텍스처 캐시를 1GB 또는 768MB로 묶고, 메모리 풀을 256MB 단위로 배치합니다. 텍스처를 더 자주 다시 읽습니다. 끄면 게임 본래의 메모리 사용량으로 돌아갑니다.</string>
     <string name="banana_pack_import">Banana Native 팩 가져오기</string>
     <string name="banana_pack_import_description">Banana Native 앱에 이미 있는 이 게임의 팩을 가져와 다시 준비하지 않고 시작합니다. Banana Native에서: 게임의 Manage › Export pack…</string>
     <string name="banana_pack_import_working">팩을 복사하고 확인하는 중입니다. 큰 팩은 몇 분 걸리니 앱을 열어 두세요.</string>

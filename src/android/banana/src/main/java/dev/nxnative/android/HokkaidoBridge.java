@@ -86,6 +86,16 @@ public final class HokkaidoBridge {
         return p == null ? null : p.status;
     }
 
+    /** Whether this phone is in one of LoopNative's memory classes (12 GB or 8 GB). */
+    public static boolean lowMemoryPhone(Context c) {
+        return LoopNativeTuning.lowMemoryPhone(c);
+    }
+
+    /** Whether the phone is in the 12 GB class and the game takes it: where LoopNative lets a game that asks for more RAM start. */
+    public static boolean memoryClassCovers(Context c, String titleId) {
+        return LoopNativeTuning.twelveGbClass(LoopNativeTuning.memTotal(c)) && LoopNativeTuning.memoryClass(c, titleId);
+    }
+
     /** The RAM in GiB the game's profile calls required, 0 when it names none or has no profile. */
     public static double requiredRamGib(String titleId) {
         Profile p = Profile.of(titleId == null ? "" : titleId.toUpperCase(Locale.ROOT));
@@ -533,6 +543,8 @@ public final class HokkaidoBridge {
      * effect at the game's next start. Soft textures is the game's Advanced row DM_VK_TEX_SOFT.
      */
     public static final int OPTION_FULL_VEGETATION = 0, OPTION_RAM_SAVER = 1, OPTION_SOFT_TEXTURES = 2, OPTION_RAM_SAVER_STRONG = 3;
+    /** LoopNative's memory class for phones of 12 GB or less (LoopNativeTuning.memoryClass). */
+    public static final int OPTION_MEMORY_CLASS = 4;
 
     /** Whether the game has the option: full vegetation only where its profile has a vegetation detail */
     public static boolean hasOption(String titleId, int option) {
@@ -542,6 +554,7 @@ public final class HokkaidoBridge {
 
     public static boolean option(Context c, String titleId, int option) {
         switch (option) {
+            case OPTION_MEMORY_CLASS: return LoopNativeTuning.memoryClass(c, titleId);
             case OPTION_FULL_VEGETATION: return Prefs.fullVegetation(c, titleId);
             case OPTION_RAM_SAVER: return Prefs.ramSaver(c, titleId);
             case OPTION_RAM_SAVER_STRONG: return Prefs.ramSaverStrong(c, titleId);
@@ -551,6 +564,7 @@ public final class HokkaidoBridge {
 
     public static void setOption(Context c, String titleId, int option, boolean on) {
         switch (option) {
+            case OPTION_MEMORY_CLASS: LoopNativeTuning.memoryClass(c, titleId, on); break;
             case OPTION_FULL_VEGETATION: Prefs.fullVegetation(c, titleId, on); break;
             // Strong includes the RAM saver, as on Banana Native's Game settings page
             case OPTION_RAM_SAVER: Prefs.ramSaver(c, titleId, on); if (!on) Prefs.ramSaverStrong(c, titleId, false); break;

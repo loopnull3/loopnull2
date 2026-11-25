@@ -16,7 +16,7 @@ public final class LoopNativeTuning {
     private LoopNativeTuning() {}
 
     /** Raised when the starting settings change, so a game takes the new ones once. */
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final long GIB = 1L << 30;
     /** An 8 GB phone reports about 7.3 to 7.6 GiB; a 12 GB one about 11. */
     private static final long EIGHT_GB_CLASS_MAX = GIB * 17 / 2;
@@ -35,23 +35,71 @@ public final class LoopNativeTuning {
         return memTotal > 0 && memTotal <= EIGHT_GB_CLASS_MAX;
     }
 
+    /** Banana Native's own low-RAM class: MemTotal of 12 GiB or less (vka_lowram.h), above the 8 GB class. */
+    public static boolean twelveGbClass(long memTotal) {
+        return memTotal > EIGHT_GB_CLASS_MAX && memTotal <= 12 * GIB;
+    }
+
+    /** Whether this phone is in a memory class (12 GB or 8 GB): Banana Native is tested on 16 GB phones. */
+    public static boolean lowMemoryPhone(Context c) {
+        long total = memTotal(c);
+        return eightGbClass(total) || twelveGbClass(total);
+    }
+
+    /**
+     * The memory class: what a profile's low-RAM keys do (dm/games/README.md low_ram_place_part_mb,
+     * low_ram_img_cache_max_mb, low_ram_app_pool_mb), given to every game through the switches that override them.
+     * Upstream has the keys for one game, Fire Emblem Fortune's Weave, measured on an 11 GiB AYN Thor (Adreno 740,
+     * Turnip): pools of 256 MiB or more placed by parts, the texture cache at 1024 MiB, and 5632 MiB reported to the
+     * game as its total memory instead of 9216, so its SDK keeps smaller caches (the low-memory killer stopped it in
+     * 0 of 4 runs against 3 of 3). The 12 GB class takes those values. The 8 GB class reports 4096 MiB, which that
+     * game also ran with, and a 768 MiB texture cache. Only the report changes: a game that comes within 64 MiB of
+     * the reported total gets the whole pool back for the session, so no map is refused (hle_svc.c reported_total).
+     */
+    private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB", "DM_VK_IMG_LIMIT_MB", "DM_APP_POOL_MB"};
+    private static final String[] TWELVE_GB_VALUES = {"256", "1024", "5632"};
+    private static final String[] EIGHT_GB_VALUES = {"256", "768", "4096"};
+    /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.45). */
+    private static final String FIRE_EMBLEM = "04007EF01F8AE000";
+
+    private static String memoryClassKey(String id) { return "loopnative_memory_class_" + id; }
+
+    /** Whether the game takes this phone's memory class (Game properties: on unless the player turned it off). */
+    public static boolean memoryClass(Context c, String id) {
+        return Prefs.of(c).getBoolean(memoryClassKey(id), true);
+    }
+
+    /** Turns the game's memory class on or off; its rows change at once and act at the game's next start. */
+    public static void memoryClass(Context c, String id, boolean on) {
+        Prefs.of(c).edit().putBoolean(memoryClassKey(id), on).commit();
+        writeMemoryClass(c, id, on);
+    }
+
+    private static void writeMemoryClass(Context c, String id, boolean on) {
+        long total = memTotal(c);
+        String[] values = !on ? null : eightGbClass(total) ? EIGHT_GB_VALUES
+                : twelveGbClass(total) && !FIRE_EMBLEM.equalsIgnoreCase(id) ? TWELVE_GB_VALUES : null;
+        // A phone above the classes, or a game with its own keys: nothing of LoopNative's stays set
+        for (int i = 0; i < MEMORY_CLASS_ROWS.length; i++) AdvancedSettings.set(c, MEMORY_CLASS_ROWS[i], id, values == null ? null : values[i]);
+    }
+
     /**
      * The starting settings of a game on this phone, after Hokkaido's (HokkaidoBridge.startingSettings). The 8 GB
      * class: RAM saver Strong (file-backed shader and texture pools, the texture cache at a quarter of RAM, textures
-     * without their two finest levels, one background pipeline at a time), less vegetation, and memory pools placed
-     * in parts of 256 MiB instead of whole. Ocarina of Time's RAM saver can leave holes in its terrain (seen on the
-     * Galaxy S26, where Hokkaido turns it off): on 8 GB the game does not fit without it.
+     * without their two finest levels, one background pipeline at a time) and less vegetation. Ocarina of Time's
+     * RAM saver can leave holes in its terrain (seen on the Galaxy S26, where Hokkaido turns it off): on 8 GB the
+     * game does not fit without it. Then the phone's memory class (writeMemoryClass), unless the player turned it off.
      */
     static void apply(Context c, String id) {
         String key = "loopnative_settings_" + id;
         int had = Prefs.of(c).getInt(key, 0);
         if (had >= VERSION) return;
-        if (eightGbClass(memTotal(c))) {
+        if (had < 1 && eightGbClass(memTotal(c))) {
             Prefs.ramSaver(c, id, true);
             Prefs.ramSaverStrong(c, id, true);
             Prefs.fullVegetation(c, id, false);
-            AdvancedSettings.set(c, "DM_VK_PLACE_PART_MB", id, "256");
         }
+        if (memoryClass(c, id)) writeMemoryClass(c, id, true);
         Prefs.of(c).edit().putInt(key, VERSION).commit();
     }
 

@@ -88,7 +88,8 @@ object GameEngine {
 
     /**
      * Whether Auto takes the pack engine: a game its profile calls playable, on a phone with the RAM
-     * that profile requires (Mario Kart World: 14 GiB, measured on the pack engine).
+     * that profile requires (Mario Kart World: 14 GiB, measured on the pack engine) or, short of
+     * it, a 12 GB phone with LoopNative's memory class on for the game.
      * - On Xclipse it needs a custom RADV driver: Samsung's own has no placed memory maps.
      * - Ocarina of Time's profile is still "bring-up", but upstream (Hokkaido 0.7.1) reports it
      *   playable on the Galaxy S26 with RADV, and its emulator path short of memory on 12 GB.
@@ -107,7 +108,11 @@ object GameEngine {
             return false
         }
         val required = runCatching { pack?.requiredRamGib(titleIdOf(game)) }.getOrNull() ?: 0.0
-        return required <= 0.0 || LoopNative.totalRamGib(context) >= required
+        if (required <= 0.0 || LoopNative.totalRamGib(context) >= required) {
+            return true
+        }
+        // Short of the profile's RAM: only a 12 GB phone with LoopNative's memory class on.
+        return runCatching { pack?.memoryClassCovers(context, titleIdOf(game)) }.getOrNull() ?: false
     }
 
     /**
@@ -219,13 +224,20 @@ object GameEngine {
             2,
             R.string.banana_option_soft_textures,
             R.string.banana_option_soft_textures_description
+        ),
+        MEMORY_CLASS(
+            4,
+            R.string.loopnative_option_memory_class,
+            R.string.loopnative_option_memory_class_description
         )
     }
 
-    fun packOptions(game: Game): List<PackOption> {
+    fun packOptions(context: Context, game: Game): List<PackOption> {
         val engine = pack ?: return emptyList()
+        val lowMemory = runCatching { engine.lowMemoryPhone(context) }.getOrDefault(false)
         return PackOption.entries.filter {
-            runCatching { engine.hasOption(titleIdOf(game), it.id) }.getOrDefault(false)
+            (it != PackOption.MEMORY_CLASS || lowMemory) &&
+                runCatching { engine.hasOption(titleIdOf(game), it.id) }.getOrDefault(false)
         }
     }
 
