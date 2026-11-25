@@ -16,7 +16,7 @@ public final class LoopNativeTuning {
     private LoopNativeTuning() {}
 
     /** Raised when the starting settings change, so a game takes the new ones once. */
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
     private static final long GIB = 1L << 30;
     /** An 8 GB phone reports about 7.3 to 7.6 GiB; a 12 GB one about 11. */
     private static final long EIGHT_GB_CLASS_MAX = GIB * 17 / 2;
@@ -50,15 +50,20 @@ public final class LoopNativeTuning {
      * The memory class: what a profile's low-RAM keys do (dm/games/README.md low_ram_place_part_mb,
      * low_ram_img_cache_max_mb, low_ram_app_pool_mb), given to every game through the switches that override them.
      * Upstream has the keys for one game, Fire Emblem Fortune's Weave, measured on an 11 GiB AYN Thor (Adreno 740,
-     * Turnip): pools of 256 MiB or more placed by parts, the texture cache at 1024 MiB, and 5632 MiB reported to the
-     * game as its total memory instead of 9216, so its SDK keeps smaller caches (the low-memory killer stopped it in
-     * 0 of 4 runs against 3 of 3). The 12 GB class takes those values. The 8 GB class reports 4096 MiB, which that
-     * game also ran with, and a 768 MiB texture cache. Only the report changes: a game that comes within 64 MiB of
-     * the reported total gets the whole pool back for the session, so no map is refused (hle_svc.c reported_total).
+     * Turnip): pools of 256 MiB or more placed by parts, and 5632 MiB reported to the game as its total memory
+     * instead of 9216, so its SDK keeps smaller caches (the low-memory killer stopped it in 0 of 4 runs against 3 of
+     * 3). The 12 GB class takes those values. The 8 GB class reports 4096 MiB, which that game also ran with. Only
+     * the report changes: a game that comes within 64 MiB of the reported total gets the whole pool back for the
+     * session, so no map is refused (hle_svc.c reported_total).
+     *
+     * The texture cache keeps its measured limit (vka_texlimit.h): what the phone can hold now, the scene's working
+     * set never taken back. A fixed DM_VK_IMG_LIMIT_MB replaces that guard too, and a limit under a game's working
+     * set uploads its textures again every frame (docs/reference/memory.md "Texture cache thrash"): the smaller
+     * report is what makes room for the cache instead.
      */
-    private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB", "DM_VK_IMG_LIMIT_MB", "DM_APP_POOL_MB"};
-    private static final String[] TWELVE_GB_VALUES = {"256", "1024", "5632"};
-    private static final String[] EIGHT_GB_VALUES = {"256", "768", "4096"};
+    private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB", "DM_APP_POOL_MB"};
+    private static final String[] TWELVE_GB_VALUES = {"256", "5632"};
+    private static final String[] EIGHT_GB_VALUES = {"256", "4096"};
     /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.45). */
     private static final String FIRE_EMBLEM = "04007EF01F8AE000";
 
@@ -98,6 +103,11 @@ public final class LoopNativeTuning {
             Prefs.ramSaver(c, id, true);
             Prefs.ramSaverStrong(c, id, true);
             Prefs.fullVegetation(c, id, false);
+        }
+        if (had == 2) {
+            // Version 2 also fixed the texture cache at 1024 or 768 MiB: taken back, a player's own limit stays
+            String limit = AdvancedSettings.own(c, "DM_VK_IMG_LIMIT_MB", id);
+            if ("1024".equals(limit) || "768".equals(limit)) AdvancedSettings.set(c, "DM_VK_IMG_LIMIT_MB", id, null);
         }
         if (memoryClass(c, id)) writeMemoryClass(c, id, true);
         Prefs.of(c).edit().putInt(key, VERSION).commit();

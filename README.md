@@ -77,8 +77,11 @@ low-memory killer from 3 of 3 runs to 0 of 4).
 | | 12 GB phones (Galaxy S26) | 8 GB phones (Galaxy Z Flip5) |
 |---|---|---|
 | Total memory the game is told (9 GB on the console) | 5.5 GB | 4 GB |
-| Texture cache | 1 GB | 768 MB |
 | Memory pools placed in parts of | 256 MB | 256 MB |
+
+The texture cache is left to measure its own limit from the phone's free memory: a fixed small
+cache makes a game with many textures upload them again and again, which is stutter. The smaller
+report is what makes room for it.
 
 With its memory class on, Auto lets a 12 GB phone start a game on the pack whose profile asks for
 more RAM (Mario Kart World: 14 GiB). This is an experiment: Banana Native itself, up to v0.3.51,
@@ -155,6 +158,23 @@ very phone. LoopNative's S26 profile:
 
 "Without lag" is the goal, not a promise: shader builds the first time a scene appears, scene
 loads and, for the largest games, memory coming back from storage can still stutter.
+
+## Less stutter
+
+Most stutter is a shader being built the first time a scene needs it. Both kinds of engine can
+build ahead of play:
+
+- **LoopNative Pack:** a prepared game without shaders asks once, before its first start,
+  whether to build them all first (**Build first**, 20 to 45 minutes for a large game). Later:
+  Game properties › **Build all shaders now**.
+- **Hokkaido and LoopNative:** LoopNative's report has **Build shaders first**; Game properties
+  has **Build all shaders now (Hokkaido engine)**. The compute shaders in the game's files and the
+  graphics pipelines saved from earlier play are then built on the loading screen. Graphics
+  pipelines never seen before are still built when they first appear.
+
+What is left: the first time a never-seen graphics pipeline appears (emulator engines), scene
+loads, memory coming back from storage on phones with less RAM than the game uses, and the
+phone's own thermal throttling, which the governor's 30 fps cap is there to stay ahead of.
 
 ## Two Joy-Cons as one controller
 

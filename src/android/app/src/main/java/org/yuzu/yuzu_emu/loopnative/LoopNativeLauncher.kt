@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.model.Game
+import org.yuzu.yuzu_emu.utils.ShaderPrecache
 import java.util.Locale
 
 /**
@@ -86,7 +87,7 @@ object LoopNativeLauncher {
             }
             working.dismiss()
             result.onSuccess { (summary, plan) ->
-                MaterialAlertDialogBuilder(activity)
+                val ready = MaterialAlertDialogBuilder(activity)
                     .setTitle(activity.getString(R.string.loopnative_ready_title, game.title))
                     .setMessage(describe(activity, game, plan, summary))
                     .setPositiveButton(R.string.loopnative_play) { _, _ ->
@@ -96,7 +97,13 @@ object LoopNativeLauncher {
                         if (startAfter) android.R.string.cancel else R.string.loopnative_close,
                         null
                     )
-                    .show()
+                // Shaders built on the loading screen instead of while playing: less stutter
+                if (!runCatching { ShaderPrecache.exists(game.programId) }.getOrDefault(true)) {
+                    ready.setNeutralButton(R.string.shader_precache_first) { _, _ ->
+                        ShaderPrecache.show(activity, game) { start(activity, game, emulate) }
+                    }
+                }
+                ready.show()
             }.onFailure {
                 MaterialAlertDialogBuilder(activity)
                     .setTitle(R.string.loopnative_prepare_failed)

@@ -1184,7 +1184,11 @@
     <string name="banana_option_soft_textures">Soft textures</string>
     <string name="banana_option_soft_textures_description">Large textures at a lower resolution, so the game needs less memory. Textures look softer up close.</string>
     <string name="loopnative_option_memory_class">Memory class (12 GB / 8 GB phones)</string>
-    <string name="loopnative_option_memory_class_description">Starts the game with less memory on phones below the 16 GB the pack engine is tested on: the game is told it has 5.5 GB (12 GB phones) or 4 GB (8 GB phones) instead of 9, so it keeps smaller caches; the texture cache is held at 1 GB or 768 MB; memory pools are placed in 256 MB parts. Textures reload more often. Off: the game\'s own memory use.</string>
+    <string name="loopnative_option_memory_class_description">Starts the game with less memory on phones below the 16 GB the pack engine is tested on: the game is told it has 5.5 GB (12 GB phones) or 4 GB (8 GB phones) instead of 9, so it keeps smaller caches and leaves more room for textures; memory pools are placed in 256 MB parts. Off: the game\'s own memory use.</string>
+    <string name="pack_shaders_first_title">Build %1$s\'s shaders first?</string>
+    <string name="pack_shaders_first_description">The game is ready, but none of its shaders are built yet. If you play now, each one is built the first time a scene needs it: scenes show up late or with parts missing, and the game stutters until then. Building them all first takes a while (20 to 45 minutes for a large game; keep the phone on the charger) and makes the first sessions smooth. You can also do it later from Game properties › Build all shaders now.</string>
+    <string name="pack_shaders_first_build">Build first</string>
+    <string name="pack_shaders_first_play">Play now</string>
     <string name="banana_pack_import">Import a Banana Native pack</string>
     <string name="banana_pack_import_description">Use a pack this game already has in the Banana Native app, so it starts without preparing again. In Banana Native: the game\'s Manage › Export pack…</string>
     <string name="banana_pack_import_working">Copying and checking the pack. A large pack takes a few minutes; keep the app open.</string>
@@ -1237,6 +1241,7 @@
     <string name="shader_precache_done_title">%1$s: shaders found</string>
     <string name="shader_precache_done_description">%1$d compute shaders from %2$d shader archives (%3$d could not be converted). The next start builds them on the loading screen, with the graphics pipelines saved from earlier play. That first start takes longer; later ones only build what is new.</string>
     <string name="shader_precache_play">Play</string>
+    <string name="shader_precache_first">Build shaders first</string>
     <string name="shader_precache_failed">Shaders not built</string>
     <string name="shader_precache_stopped">Stopped</string>
     <string name="shader_precache_stopped_description">Nothing was written. Build all shaders now starts it again.</string>

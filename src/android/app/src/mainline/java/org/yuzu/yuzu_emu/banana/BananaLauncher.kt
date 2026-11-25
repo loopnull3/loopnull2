@@ -12,6 +12,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.preference.PreferenceManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import dev.nxnative.android.HokkaidoBridge
@@ -129,7 +130,7 @@ class BananaLauncher : NativeEngineUi {
     private fun show(start: Start, plan: HokkaidoBridge.Plan) {
         val activity = start.activity
         when (plan.kind) {
-            HokkaidoBridge.Plan.READY -> play(start, plan)
+            HokkaidoBridge.Plan.READY -> if (!offerShaders(start, plan)) play(start, plan)
             HokkaidoBridge.Plan.PREPARE -> MaterialAlertDialogBuilder(activity)
                 .setTitle(activity.getString(R.string.banana_prepare_title, plan.title))
                 .setMessage(plan.message)
@@ -158,6 +159,41 @@ class BananaLauncher : NativeEngineUi {
                 }
                 builder.show()
             }
+        }
+    }
+
+    /**
+     * LoopNative: a ready game without a shader library builds every shader while it plays, which is
+     * where most of its stutter comes from. Once per game, before its first start, the player is
+     * offered to build them all first. True when the offer is showing.
+     */
+    private fun offerShaders(start: Start, plan: HokkaidoBridge.Plan): Boolean {
+        val activity = start.activity
+        val preferences = PreferenceManager.getDefaultSharedPreferences(activity)
+        val key = "pack_shaders_offered_" + plan.titleId().uppercase()
+        if (preferences.getBoolean(key, false) || !HokkaidoBridge.lacksShaderLibrary(plan)) {
+            return false
+        }
+        preferences.edit().putBoolean(key, true).apply()
+        MaterialAlertDialogBuilder(activity)
+            .setTitle(activity.getString(R.string.pack_shaders_first_title, start.title))
+            .setMessage(R.string.pack_shaders_first_description)
+            .setPositiveButton(R.string.pack_shaders_first_build) { _, _ -> buildShaders(start) }
+            .setNegativeButton(R.string.pack_shaders_first_play) { _, _ -> play(start, plan) }
+            .show()
+        return true
+    }
+
+    /** Translates every shader of the prepared game now, then offers Play (prepareShaders without its question). */
+    private fun buildShaders(start: Start) {
+        val activity = start.activity
+        activity.lifecycleScope.launch {
+            val plan = withContext(Dispatchers.IO) {
+                runCatching { HokkaidoBridge.shadersPlan(activity, start.path) }
+            }
+            plan.onSuccess {
+                if (it.kind == HokkaidoBridge.Plan.PREPARE) prepare(start, it) else show(start, it)
+            }.onFailure { problem(start, start.title, it.message ?: it.toString()) }
         }
     }
 

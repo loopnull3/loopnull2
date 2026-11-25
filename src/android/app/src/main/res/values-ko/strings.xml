@@ -771,7 +771,11 @@
     <string name="banana_option_soft_textures">부드러운 텍스처</string>
     <string name="banana_option_soft_textures_description">큰 텍스처를 낮은 해상도로 써서 메모리를 줄입니다. 가까이서 보면 텍스처가 흐릿합니다.</string>
     <string name="loopnative_option_memory_class">메모리 등급 (12GB / 8GB 휴대폰)</string>
-    <string name="loopnative_option_memory_class_description">팩 엔진이 테스트된 16GB보다 작은 휴대폰에서 게임을 더 적은 메모리로 시작합니다. 게임에는 총 메모리를 9GB 대신 5.5GB(12GB 휴대폰) 또는 4GB(8GB 휴대폰)로 알려 캐시를 작게 잡게 하고, 텍스처 캐시를 1GB 또는 768MB로 묶고, 메모리 풀을 256MB 단위로 배치합니다. 텍스처를 더 자주 다시 읽습니다. 끄면 게임 본래의 메모리 사용량으로 돌아갑니다.</string>
+    <string name="loopnative_option_memory_class_description">팩 엔진이 테스트된 16GB보다 작은 휴대폰에서 게임을 더 적은 메모리로 시작합니다. 게임에는 총 메모리를 9GB 대신 5.5GB(12GB 휴대폰) 또는 4GB(8GB 휴대폰)로 알려 캐시를 작게 잡게 해서 텍스처에 쓸 공간을 남기고, 메모리 풀을 256MB 단위로 배치합니다. 끄면 게임 본래의 메모리 사용량으로 돌아갑니다.</string>
+    <string name="pack_shaders_first_title">%1$s의 셰이더를 먼저 빌드할까요?</string>
+    <string name="pack_shaders_first_description">게임은 준비됐지만 셰이더는 아직 하나도 빌드되지 않았습니다. 지금 플레이하면 장면이 처음 필요로 할 때마다 하나씩 빌드해서, 장면이 늦게 나오거나 일부가 빠지고 그동안 게임이 끊깁니다. 전부 먼저 빌드하면 시간이 걸리지만(큰 게임은 20~45분, 충전기에 꽂아두세요) 첫 플레이부터 부드럽습니다. 나중에 게임 속성 › 지금 모든 셰이더 빌드에서 할 수도 있습니다.</string>
+    <string name="pack_shaders_first_build">먼저 빌드</string>
+    <string name="pack_shaders_first_play">지금 플레이</string>
     <string name="banana_pack_import">Banana Native 팩 가져오기</string>
     <string name="banana_pack_import_description">Banana Native 앱에 이미 있는 이 게임의 팩을 가져와 다시 준비하지 않고 시작합니다. Banana Native에서: 게임의 Manage › Export pack…</string>
     <string name="banana_pack_import_working">팩을 복사하고 확인하는 중입니다. 큰 팩은 몇 분 걸리니 앱을 열어 두세요.</string>
@@ -824,6 +828,7 @@
     <string name="shader_precache_done_title">%1$s: 셰이더를 찾았습니다</string>
     <string name="shader_precache_done_description">셰이더 아카이브 %2$d개에서 컴퓨트 셰이더 %1$d개를 찾았습니다 (%3$d개는 변환 실패). 다음 시작 때 로딩 화면에서 이전 플레이의 그래픽 파이프라인과 함께 빌드됩니다. 그 첫 시작은 오래 걸리고, 이후에는 새로 생긴 것만 빌드합니다.</string>
     <string name="shader_precache_play">플레이</string>
+    <string name="shader_precache_first">셰이더 먼저 빌드</string>
     <string name="shader_precache_failed">셰이더를 빌드하지 못했습니다</string>
     <string name="shader_precache_stopped">중지됨</string>
     <string name="shader_precache_stopped_description">기록된 것이 없습니다. "지금 모든 셰이더 빌드"로 다시 시작할 수 있습니다.</string>

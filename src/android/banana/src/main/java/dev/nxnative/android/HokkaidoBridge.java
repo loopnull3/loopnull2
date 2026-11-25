@@ -86,6 +86,14 @@ public final class HokkaidoBridge {
         return p == null ? null : p.status;
     }
 
+    /**
+     * Whether a ready game has no shader library yet: all of its shaders are then built while it plays (the shader
+     * layer), which shows as scenes drawn late and as stutter until each one has been built once.
+     */
+    public static boolean lacksShaderLibrary(Plan plan) {
+        return plan != null && plan.game != null && plan.game.packDir != null && Pack.libraryOf(new File(plan.game.packDir)) == null;
+    }
+
     /** Whether this phone is in one of LoopNative's memory classes (12 GB or 8 GB). */
     public static boolean lowMemoryPhone(Context c) {
         return LoopNativeTuning.lowMemoryPhone(c);
