@@ -566,7 +566,7 @@ public final class HokkaidoBridge {
             case OPTION_FULL_VEGETATION: return Prefs.fullVegetation(c, titleId);
             case OPTION_RAM_SAVER: return Prefs.ramSaver(c, titleId);
             case OPTION_RAM_SAVER_STRONG: return Prefs.ramSaverStrong(c, titleId);
-            default: return "1".equals(AdvancedSettings.effective(c, "DM_VK_TEX_SOFT", titleId));
+            default: return LoopNativeTuning.softTextures(c, titleId);
         }
     }
 
@@ -577,7 +577,7 @@ public final class HokkaidoBridge {
             // Strong includes the RAM saver, as on Banana Native's Game settings page
             case OPTION_RAM_SAVER: Prefs.ramSaver(c, titleId, on); if (!on) Prefs.ramSaverStrong(c, titleId, false); break;
             case OPTION_RAM_SAVER_STRONG: Prefs.ramSaverStrong(c, titleId, on); if (on) Prefs.ramSaver(c, titleId, true); break;
-            default: AdvancedSettings.set(c, "DM_VK_TEX_SOFT", titleId, on ? "1" : "0");
+            default: LoopNativeTuning.softTextures(c, titleId, on);
         }
     }
 

@@ -769,7 +769,7 @@
     <string name="banana_option_ram_saver_strong">RAM 절약: 강함</string>
     <string name="banana_option_ram_saver_strong_description">메모리를 더 줄입니다: 텍스처의 가장 세밀한 두 단계를 빼고, 텍스처 캐시를 줄이고, 백그라운드 파이프라인을 한 번에 하나만 만듭니다. RAM 절약을 포함합니다.</string>
     <string name="banana_option_soft_textures">부드러운 텍스처</string>
-    <string name="banana_option_soft_textures_description">큰 텍스처를 낮은 해상도로 써서 메모리를 줄입니다. 가까이서 보면 텍스처가 흐릿합니다.</string>
+    <string name="banana_option_soft_textures_description">큰 텍스처를 낮은 해상도로 써서 메모리를 줄입니다. 가까이서 보면 텍스처가 흐릿합니다. 마리오카트 월드는 기본으로 켜져 있습니다. 끄면 갤럭시 S26에서 도로 페인트와 대시 패널이 분홍색으로 나옵니다.</string>
     <string name="loopnative_option_memory_class">메모리 등급 (12GB / 8GB 휴대폰)</string>
     <string name="loopnative_option_memory_class_description">팩 엔진이 테스트된 16GB보다 작은 휴대폰에서 게임의 메모리 풀을 통째가 아니라 256MB 단위로 배치해, 한 번에 RAM에 올라가는 양을 줄입니다. 끄면 통째로 배치합니다.</string>
     <string name="pack_shaders_first_title">%1$s의 셰이더를 먼저 빌드할까요?</string>

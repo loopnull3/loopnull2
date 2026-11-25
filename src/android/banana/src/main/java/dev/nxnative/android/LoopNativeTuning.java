@@ -68,6 +68,29 @@ public final class LoopNativeTuning {
     /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.45). */
     private static final String FIRE_EMBLEM = "04007EF01F8AE000";
 
+    /** The game whose profile keeps soft textures on (game.tsv tex_soft on, Banana Native v0.3.45). */
+    private static final String MARIO_KART_WORLD = "0400C3F00006E000";
+
+    /** Soft textures when the game's Advanced row is not set: what its profile says, and on with the RAM saver. */
+    private static boolean softTexturesByDefault(Context c, String id) {
+        return MARIO_KART_WORLD.equalsIgnoreCase(id) || Prefs.ramSaver(c, id);
+    }
+
+    /**
+     * Soft textures as the game runs with them: its Advanced row DM_VK_TEX_SOFT, else its default. Hokkaido's
+     * switch showed an unset row as off and wrote 0 when it was turned off, which holds Mario Kart World's own
+     * setting off: on a Galaxy S26 (RADV) its road paint and dash panels then showed magenta.
+     */
+    public static boolean softTextures(Context c, String id) {
+        String row = AdvancedSettings.effective(c, "DM_VK_TEX_SOFT", id);
+        return row == null ? softTexturesByDefault(c, id) : "1".equals(row);
+    }
+
+    /** Soft textures on or off: the row is cleared when that is the game's default anyway, so the default keeps deciding. */
+    public static void softTextures(Context c, String id, boolean on) {
+        AdvancedSettings.set(c, "DM_VK_TEX_SOFT", id, on == softTexturesByDefault(c, id) ? null : on ? "1" : "0");
+    }
+
     private static String memoryClassKey(String id) { return "loopnative_memory_class_" + id; }
 
     /** Whether the game takes this phone's memory class (Game properties: on unless the player turned it off). */
