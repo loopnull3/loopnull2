@@ -44,6 +44,12 @@ interface NativeEngineUi {
     /** Sets a game option; it takes effect at the game's next start. */
     fun setOption(context: Context, titleId: String, option: Int, on: Boolean)
 
+    /** The game's own switches for Banana Native's host (KEY=VALUE, one a line), "" when it has none: a diagnostic. */
+    fun extraEnvironment(context: Context, titleId: String): String
+
+    /** Sets them; from the game's next start they win over its other settings. */
+    fun setExtraEnvironment(context: Context, titleId: String, lines: String)
+
     /**
      * Starts the game in Banana Native, preparing it first when it needs that, with Hokkaido's GPU driver for it
      * ([driverZip]: a driver zip, empty for the system's), Hokkaido's save folder ([saveDir], shared by both

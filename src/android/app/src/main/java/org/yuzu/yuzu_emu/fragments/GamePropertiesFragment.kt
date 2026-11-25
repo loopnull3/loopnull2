@@ -934,8 +934,8 @@ class GamePropertiesFragment : Fragment() {
             .show()
     }
 
-    private fun describePackOptions(): String =
-        GameEngine.packOptions(requireContext(), args.game).joinToString(" · ") {
+    private fun describePackOptions(): String {
+        val options = GameEngine.packOptions(requireContext(), args.game).map {
             getString(
                 if (GameEngine.packOption(requireContext(), args.game, it)) {
                     R.string.loopnative_option_on
@@ -945,6 +945,11 @@ class GamePropertiesFragment : Fragment() {
                 getString(it.title)
             )
         }
+        // Switches left in from a test change how the game runs: they stay in sight
+        val switches = GameEngine.packEnvironmentCount(requireContext(), args.game)
+        val set = if (switches > 0) listOf(getString(R.string.banana_environment_set, switches)) else emptyList()
+        return (options + set).joinToString(" · ")
+    }
 
     /** The pack engine's game options (full vegetation, RAM saver, soft textures); they apply at the next start. */
     private fun showPackOptionsDialog() {
@@ -972,7 +977,41 @@ class GamePropertiesFragment : Fragment() {
                 }
             }
             .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton(R.string.banana_environment) { _, _ -> showPackEnvironmentDialog() }
             .setOnDismissListener { reloadList() }
+            .show()
+    }
+
+    /** The pack engine's switches for this game (KEY=VALUE lines), for a test on the phone; empty unless set. */
+    private fun showPackEnvironmentDialog() {
+        val context = requireContext()
+        val padding = (resources.displayMetrics.density * 24).toInt()
+        val input = android.widget.EditText(context).apply {
+            setText(GameEngine.packEnvironment(context, args.game))
+            hint = "DM_VK_MESH_EMU=0"
+            typeface = android.graphics.Typeface.MONOSPACE
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            minLines = 3
+        }
+        val box = android.widget.FrameLayout(context).apply {
+            setPadding(padding, 0, padding, 0)
+            addView(input)
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(context)
+            .setTitle(R.string.banana_environment)
+            .setMessage(R.string.banana_environment_description)
+            .setView(box)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                GameEngine.setPackEnvironment(context, args.game, input.text.toString())
+                reloadList()
+            }
+            .setNeutralButton(R.string.banana_environment_clear) { _, _ ->
+                GameEngine.setPackEnvironment(context, args.game, "")
+                reloadList()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 

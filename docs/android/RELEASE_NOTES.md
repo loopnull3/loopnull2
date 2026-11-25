@@ -48,6 +48,8 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   driver is installed; Ocarina of Time on the Galaxy S26 with RADV.
 - Game properties › **LoopNative Pack options**, **Import a Banana Native pack**, **Build all
   shaders now**.
+- **Diagnostic switches** (in LoopNative Pack options): Banana Native switches for one game, to
+  test a change on the phone without another build.
 - **White picture and white blocks fixed** (Mario Kart World, Ocarina of Time on RADV): the shader
   tools write min / max / clamp with the Switch's NaN results.
 - **Pink textures:** ASTC blocks that hold no ASTC data become transparent instead of pink; a

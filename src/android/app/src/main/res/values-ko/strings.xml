@@ -772,6 +772,10 @@
     <string name="banana_option_soft_textures_description">큰 텍스처를 낮은 해상도로 써서 메모리를 줄입니다. 가까이서 보면 텍스처가 흐릿합니다. 마리오카트 월드는 기본으로 켜져 있습니다. 끄면 갤럭시 S26에서 도로 페인트와 대시 패널이 분홍색으로 나옵니다.</string>
     <string name="loopnative_option_memory_class">메모리 등급 (12GB / 8GB 휴대폰)</string>
     <string name="loopnative_option_memory_class_description">팩 엔진이 테스트된 16GB보다 작은 휴대폰에서 게임의 메모리 풀을 통째가 아니라 256MB 단위로 배치해, 한 번에 RAM에 올라가는 양을 줄입니다. 끄면 통째로 배치합니다.</string>
+    <string name="banana_environment">진단 스위치</string>
+    <string name="banana_environment_description">팩 엔진에서 이 게임에 줄 Banana Native 스위치입니다. 한 줄에 KEY=VALUE 하나씩 적습니다. 다음 실행부터 다른 모든 설정보다 우선하며, 로그에 [adv] 줄로 남습니다. 테스트용이므로 평소에는 비워 두세요.</string>
+    <string name="banana_environment_clear">지우기</string>
+    <string name="banana_environment_set">진단 스위치 %1$d개 설정됨</string>
     <string name="pack_shaders_first_title">%1$s의 셰이더를 먼저 빌드할까요?</string>
     <string name="pack_shaders_first_description">게임은 준비됐지만 셰이더는 아직 하나도 빌드되지 않았습니다. 지금 플레이하면 장면이 처음 필요로 할 때마다 하나씩 빌드해서, 장면이 늦게 나오거나 일부가 빠지고 그동안 게임이 끊깁니다. 전부 먼저 빌드하면 시간이 걸리지만(큰 게임은 20~45분, 충전기에 꽂아두세요) 첫 플레이부터 부드럽습니다. 나중에 게임 속성 › 지금 모든 셰이더 빌드에서 할 수도 있습니다.</string>
     <string name="pack_shaders_first_build">먼저 빌드</string>

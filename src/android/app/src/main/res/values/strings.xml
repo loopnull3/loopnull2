@@ -1185,6 +1185,10 @@
     <string name="banana_option_soft_textures_description">Large textures at a lower resolution, so the game needs less memory. Textures look softer up close. Mario Kart World has it on by default: without it its road paint and dash panels show pink on the Galaxy S26.</string>
     <string name="loopnative_option_memory_class">Memory class (12 GB / 8 GB phones)</string>
     <string name="loopnative_option_memory_class_description">On phones below the 16 GB the pack engine is tested on: the game\'s memory pools are placed in 256 MB parts instead of whole, which keeps less of them in RAM at once. Off: placed whole.</string>
+    <string name="banana_environment">Diagnostic switches</string>
+    <string name="banana_environment_description">Banana Native switches for this game on the pack engine, one KEY=VALUE a line. From its next start they win over every other setting, and the log lists each one as an [adv] line. For testing: leave it empty otherwise.</string>
+    <string name="banana_environment_clear">Clear</string>
+    <string name="banana_environment_set">%1$d diagnostic switches set</string>
     <string name="pack_shaders_first_title">Build %1$s\'s shaders first?</string>
     <string name="pack_shaders_first_description">The game is ready, but none of its shaders are built yet. If you play now, each one is built the first time a scene needs it: scenes show up late or with parts missing, and the game stutters until then. Building them all first takes a while (20 to 45 minutes for a large game; keep the phone on the charger) and makes the first sessions smooth. You can also do it later from Game properties › Build all shaders now.</string>
     <string name="pack_shaders_first_build">Build first</string>

@@ -121,3 +121,9 @@ CI runs those tests with the address and undefined-behaviour sanitizers
   applied, where guest memory lives and every governor step.
 - The pack manifest of a prepared game is at
   `Android/data/dev.loopnull.loopnative/files/loopnative/packs/<title ID>/manifest.json`.
+- **LoopNative Pack options › Diagnostic switches** takes Banana Native switches for one game
+  (`KEY=VALUE`, one a line; Banana Native's Extra environment). The host reads them last, so they
+  win over the game's other settings, and the run's log lists each as an `[adv]` line: a switch
+  can be A/B'd on the phone without another build (`DM_VK_MESH_EMU=0`, `DM_VK_MESH_SKIP=<mesh
+  shader key>`, `DM_VK_DRAW_SKIP_KEY=<pixel shader key>`, `DM_VK_MESH_LOG=1`). Game properties
+  shows how many are set.

@@ -582,6 +582,15 @@ public final class HokkaidoBridge {
     }
 
     /**
+     * The game's own switches for the host (Banana Native's Extra environment: KEY=VALUE, one a line), "" when it has
+     * none. The host takes them last, so they win over the game's other settings: a diagnostic, to A/B a switch on the
+     * phone without another build. Each one in effect is an [adv] line of the run's log.
+     */
+    public static String extraEnvironment(Context c, String titleId) { return Prefs.gameEnv(c, titleId); }
+
+    public static void setExtraEnvironment(Context c, String titleId, String lines) { Prefs.gameEnv(c, titleId, lines); }
+
+    /**
      * Banana Native's Import pack (PackUi.importRun) for Hokkaido: a pack that Banana Native's own app exported (its
      * game's Manage › Export pack…, banana-pack-&lt;title ID&gt;-&lt;version&gt;.zip) or a pack folder, checked against the game
      * in dumpPath and put into this app's packs/&lt;title ID&gt;, which the game's next start finds first. Null when it is

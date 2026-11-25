@@ -68,6 +68,12 @@ class BananaLauncher : NativeEngineUi {
     override fun setOption(context: Context, titleId: String, option: Int, on: Boolean) =
         HokkaidoBridge.setOption(context, titleId, option, on)
 
+    override fun extraEnvironment(context: Context, titleId: String): String =
+        HokkaidoBridge.extraEnvironment(context, titleId)
+
+    override fun setExtraEnvironment(context: Context, titleId: String, lines: String) =
+        HokkaidoBridge.setExtraEnvironment(context, titleId, lines)
+
     override fun launch(
         activity: FragmentActivity,
         gamePath: String,

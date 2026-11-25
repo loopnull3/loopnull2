@@ -248,6 +248,18 @@ object GameEngine {
         pack?.setOption(context, titleIdOf(game), option.id, on)
     }
 
+    /** The pack engine's diagnostic switches for a game (KEY=VALUE lines), "" when it has none. */
+    fun packEnvironment(context: Context, game: Game): String =
+        runCatching { pack?.extraEnvironment(context, titleIdOf(game)) }.getOrNull().orEmpty()
+
+    fun setPackEnvironment(context: Context, game: Game, lines: String) {
+        pack?.setExtraEnvironment(context, titleIdOf(game), lines)
+    }
+
+    /** How many switches [packEnvironment] holds, read as the host reads them. */
+    fun packEnvironmentCount(context: Context, game: Game): Int =
+        packEnvironment(context, game).lines().map { it.trim() }.count { !it.startsWith("#") && it.indexOf('=') > 0 }
+
     /**
      * Game properties › Build all shaders now, for the emulator engines: builds the game's shader
      * precache, then offers to play it on the engine it would start on (not offered when that is
