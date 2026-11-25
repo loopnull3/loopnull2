@@ -79,7 +79,7 @@ public final class LoopNativeTuning {
     /**
      * Soft textures as the game runs with them: its Advanced row DM_VK_TEX_SOFT, else its default. Hokkaido's
      * switch showed an unset row as off and wrote 0 when it was turned off, which holds Mario Kart World's own
-     * setting off: on a Galaxy S26 (RADV) its road paint and dash panels then showed magenta.
+     * setting (on) off.
      */
     public static boolean softTextures(Context c, String id) {
         String row = AdvancedSettings.effective(c, "DM_VK_TEX_SOFT", id);

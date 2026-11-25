@@ -97,11 +97,14 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   from the level above; HDR endpoint modes are re-encoded as LDR
   (`native_patches/0001-astc-error-colour-blocks.patch`).
 - **Depth bias** kept where a D24 target is made D32F (`native_patches/0002-d24-depth-bias.patch`).
-- **Mario Kart World, pink road paint and dash panels:** seen on an S26 with **Soft textures**
-  held off. The game's profile has them on; with them on, the textures the game copies its road
-  from are uploaded whole again and pass the HDR conversion above (the log's `made whole again:
-  the game copied from them` and `HDR blocks made LDR` lines). The Soft textures switch now shows
-  and keeps the profile's default instead of holding it off.
+- **Soft textures** shows and keeps the game's default (Mario Kart World's profile has them on)
+  instead of holding it off.
+- **Mario Kart World, pink road paint at a distance (open):** on an S26 the road paint and the
+  ground are magenta at a distance and right up close, and the border moves with the kart. Soft
+  textures do not fix it, as this file said before. Under test: ASTC textures of sparse pools as
+  dense images, as on Banana Native's own phones, instead of sparse residency images
+  (`native_patches/0003-astc-sparse-dense.patch`; `DM_VK_SPARSE_RES_ASTC=1` in Diagnostic
+  switches to compare).
 - Shaders built with older shader tools are dropped once, so the game builds them again.
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).
