@@ -67,6 +67,7 @@ next start.
 | Auto by phone | `GameEngine.autoIsPack` | The pack only where it can play: the profile's required RAM against the phone's, a RADV driver on Xclipse, and Ocarina of Time on the S26 (bring-up in its profile, playable there upstream). |
 | RAM requirement read from the profile | `LoopNativeTuning.requiredRamGib` | Banana Native measured them on its own engine (Mario Kart World 14 GiB, Bananza 10). |
 | Registered decoder buffers | `native_patches/0004-codec-registered-buffers.patch` | Banana Native's own fix, from its v0.3.52 preview (there with nxnative PR #3173): a video decoder buffer's sync handle signals only once a picture is in it. Mario Kart World 1.0.0 aborted after about one race in five (`nn::diag abort`, Result 0x1c286f on `VideoDecoderThread`); the SDK's protocol is the same in 1.8.0. The preview's test for it is not ported (it also checks a movie-rate signal v0.3.51 lacks), and the fix has not run on a phone here. |
+| ASTC copy audit (a diagnostic) | `native_patches/0003-astc-copy-audit.patch` | `DM_VK_COPY_AUDIT=1` logs every copy into or out of an ASTC texture (texture to texture, buffer to texture, WriteTexels) and, every 600 frames, counts in the ASTC images they write the blocks this driver draws magenta: all-zero, HDR, no ASTC data. For Mario Kart World's pink road on the S26, which is open. `DM_VK_ASTC_CLEAN_COPIES=1` is the candidate under test (buffer to texture copies and WriteTexels cleaned as uploads are); it becomes the behaviour or goes once a log decides. |
 
 | NaN-exact min / max / clamp | `pack_tools/nan_exact.py`, appended to the release's shader tools at build time | RADV on Xclipse did not keep GLSL's NaN rules: white picture and white blocks in Mario Kart World and Ocarina of Time. Found and fixed on a Galaxy S26. |
 | ASTC blocks that are no ASTC data | `native_patches/0001-astc-error-colour-blocks.patch` (with `native_patches/astcenc`) | Pink error-colour texels become transparent zero and are logged; a level read mid-rewrite keeps its last whole content; unmapped levels come from the level above; HDR endpoint modes become LDR. |
@@ -133,3 +134,8 @@ CI runs those tests with the address and undefined-behaviour sanitizers
   can be A/B'd on the phone without another build (`DM_VK_MESH_EMU=0`, `DM_VK_MESH_SKIP=<mesh
   shader key>`, `DM_VK_DRAW_SKIP_KEY=<pixel shader key>`, `DM_VK_MESH_LOG=1`). Game properties
   shows how many are set.
+- **Pink (magenta) textures:** `DM_VK_COPY_AUDIT=1` there. The log then has `copy audit:` lines:
+  each kind of copy with an ASTC texture once (source, destination, levels), every 900 frames how
+  many of each and the layers they wrote, and `copy audit: scan` lines naming the texture, level
+  and layers whose image holds all-zero blocks, HDR blocks or blocks that are no ASTC data. Not
+  for play: it reads the images back.

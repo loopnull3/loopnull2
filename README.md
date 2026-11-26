@@ -102,12 +102,15 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   (`native_patches/0004-codec-registered-buffers.patch`). Not run on a phone here.
 - **Soft textures** shows and keeps the game's default (Mario Kart World's profile has them on)
   instead of holding it off.
-- **Mario Kart World, pink road paint at a distance (open):** on an S26 the road paint and the
-  ground are magenta at a distance and right up close, and the border moves with the kart. Soft
-  textures do not fix it, as this file said before. Under test: ASTC textures of sparse pools as
-  dense images, as on Banana Native's own phones, instead of sparse residency images
-  (`native_patches/0003-astc-sparse-dense.patch`; `DM_VK_SPARSE_RES_ASTC=1` in Diagnostic
-  switches to compare).
+- **Mario Kart World, pink road at a distance (open):** on an S26 the road surface is magenta in
+  bands from some distance on and whole further away, right up close, and the border moves with
+  the kart. Soft textures do not fix it, and neither did dense images for the sparse ASTC arrays
+  (tried and taken out). This driver draws all-zero blocks and HDR blocks (it has no ASTC HDR
+  profile) as magenta; uploads from the game's storage take them out, a copy does not. For the
+  next log (`native_patches/0003-astc-copy-audit.patch`, both in Diagnostic switches):
+  `DM_VK_COPY_AUDIT=1` logs every copy into or out of an ASTC texture and counts such blocks in
+  the images they write; `DM_VK_ASTC_CLEAN_COPIES=1` is the candidate under test, buffer to
+  texture copies and WriteTexels cleaned as uploads are.
 - Shaders built with older shader tools are dropped once, so the game builds them again.
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).
