@@ -102,17 +102,23 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   (`native_patches/0004-codec-registered-buffers.patch`). Not run on a phone here.
 - **Soft textures** shows and keeps the game's default (Mario Kart World's profile has them on)
   instead of holding it off.
-- **Mario Kart World, pink road at a distance (open):** on an S26 the road surface is magenta in
-  bands from some distance on and whole further away, right up close, and the border moves with
-  the kart. Soft textures do not fix it, and neither did dense images for the sparse ASTC arrays
-  (tried and taken out). This driver draws all-zero blocks and HDR blocks (it has no ASTC HDR
-  profile) as magenta; uploads from the game's storage take them out, a copy does not. For the
-  next log (`native_patches/0003-astc-copy-audit.patch`, all in Diagnostic switches):
-  `DM_VK_COPY_AUDIT=1` samples each kind of such block on the phone once, logs every copy into
-  or out of an ASTC texture and counts those blocks in the images the copies write. Two
-  candidates under test: `DM_VK_ASTC_CLEAN_COPIES=1` cleans buffer to texture copies and
-  WriteTexels as uploads are, and `DM_VK_ASTC_VOID_EXTENT=1` gives a void-extent block whose
-  extent is illegal no extent.
+- **Mario Kart World, pink at a distance (open):** on an S26 the road surface is magenta in bands
+  from some distance on and whole further away, right up close, and the border moves with the
+  kart; on the title screen a far flag has magenta squares while the same banner up close is
+  right. Measured on the phone with `DM_VK_COPY_AUDIT=1`
+  (`native_patches/0003-astc-copy-audit.patch`): the driver draws all-zero blocks, HDR blocks
+  (void-extent or an HDR endpoint mode) and illegal void-extent blocks as magenta; the game's
+  uploads hold none but all-zero blocks, which are taken out; the terrain arrays and the
+  textures copied into them hold none either when read back; the game copies texture to texture
+  only. So the bytes are right and one of the two ways the driver reaches a small mip level is
+  not. The audit's mip check now fills every level of small test textures (sizes that are and
+  are not powers of two) as an upload and as a copy do, samples them and reads them back. Two
+  candidates under test (`native_patches/0006-astc-odd-size-levels.patch`):
+  `DM_VK_ASTC_LEVEL_CAP=1` samples an ASTC texture only through the levels whose block count is
+  the first level's halved, and `DM_VK_ASTC_T2T_CPU=1` makes a copy out of an ASTC texture from
+  its storage instead of from its image. Tried and taken out: soft textures, dense images for
+  the sparse ASTC arrays, cleaning buffer copies (the game makes none), illegal void extents
+  (the game has none).
 - **Mario Kart World, light-blue pillars and spikes into the sky (open):** on an S26 they stand
   where there is no water, and go when mesh draws are skipped (`DM_VK_MESH_EMU=0`); the game's
   mesh programs there are its water (fluid simulation) and its trails. Candidate under test

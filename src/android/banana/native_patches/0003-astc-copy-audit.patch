@@ -1,21 +1,18 @@
 diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
-index de7b3026..e8174b6a 100644
+index de7b3026..7a212748 100644
 --- a/dm/gfx/vk_android/vka.h
 +++ b/dm/gfx/vk_android/vka.h
-@@ -373,6 +373,16 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
+@@ -373,6 +373,13 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
  // Before a copy out of im, or into its texture level dst_level (-1: a copy out of it): a soft texture (vka_soft.h) the game copies from, or into at its finest level, is made
  // whole again from its storage and stays whole (vka_tex.c soft_harden). Any thread that records; no render pass may be open in cb unless upload batches are on
  void vka_tex_soft_copy(vka_img *im, int dst_level, VkCommandBuffer cb);
 +// DM_VK_COPY_AUDIT (vka_tex.c "Copy audit"): the copies with an ASTC texture on either side, and a scan of what the ASTC images they write hold. kind: 0 texture → texture,
-+// 1 dropped, 2 as a blit, 3 buffer → texture, 4 that read and cleaned on the CPU, 5 WriteTexels, 6 that cleaned
++// 1 dropped, 2 as a blit, 3 buffer → texture, 4 texture → texture from the source's storage, 5 WriteTexels
 +int vka_caud_on(void);
 +void vka_caud_copy(int kind, const vka_img *s, const vka_img *d, uint32_t sl, uint32_t dl, uint32_t sz, uint32_t dz, uint32_t nz, int sx, int sy, int dx, int dy, int w, int h);
 +void vka_caud_scan(VkCommandBuffer cb, uint64_t fence);
 +void vka_astc_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: how the device samples the kinds of ASTC blocks an upload takes out, once
-+// DM_VK_ASTC_CLEAN_COPIES (an experiment): a copy's bytes into an ASTC image cleaned as an upload's are (vka_tex.c astc_clean)
-+int vka_astc_copy_clean_on(const vka_img *im);
-+void vka_astc_copy_clean(const vka_img *im, uint8_t *p, size_t n, const char *what, uint32_t level, uint32_t layer);
-+int vka_astc_copy_take(const vka_img *im, uint64_t src, uint64_t span, size_t row, size_t img, size_t rows, int nz, size_t wb, VkDeviceSize align, vka_span *s, uint32_t level, uint32_t layer);
++void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: every level of small mip-mapped compressed textures written as an upload and as a copy write them, then sampled and read back, once
  void vka_tex_soft_stats(char *b, size_t n);          // soft textures now: how many, the storage bytes their finest levels take, and how many went whole
  void vka_tex_big_stats(char *b, size_t n);           // the largest images the GPU has not written, with what sampled them and what lies over their storage (DM_VK_BIGIMG_MB)
  void vka_tex_kind_log(void);                          // log lines: the live images by content and by why the cache keeps them, and the largest (the ctl stats)
@@ -68,7 +65,7 @@ index 607b5f95..36e8ef5f 100644
  // filter, encoded with the LDR profile, and its blocks taken where this level's are all zero. Storage the guest left unmapped past a texture's finer levels
  // (Mario Kart World's road paint: the last pages of its coarser levels) then reads as the texture would at that level, not as zero texels; → blocks filled
 diff --git a/dm/gfx/vk_android/vka_exec.c b/dm/gfx/vk_android/vka_exec.c
-index 66e17d3f..ba3b0c31 100644
+index 66e17d3f..56f1af1b 100644
 --- a/dm/gfx/vk_android/vka_exec.c
 +++ b/dm/gfx/vk_android/vka_exec.c
 @@ -901,6 +901,7 @@ static uint64_t sub_commit(uint64_t reserved, int has_sig, uint64_t signal) {
@@ -87,41 +84,19 @@ index 66e17d3f..ba3b0c31 100644
      if (!vka_img_lv(im, &lv) || c->r.width <= 0 || c->r.height <= 0) return;
      size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb, rows = (size_t)(c->r.height + f->bh - 1) / f->bh;
      size_t img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;
-@@ -1220,7 +1222,7 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
-     uint64_t span = img * (size_t)(nz - 1) + row * (rows - 1) + (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb;
-     VkBuffer b; VkDeviceSize o;
-     vka_span s = {0}; VkDeviceSize al = asp == VK_IMAGE_ASPECT_COLOR_BIT ? (f->bpb % 4 == 0 ? f->bpb : f->bpb % 2 == 0 ? 2 * f->bpb : 4 * f->bpb) : 4;   // a whole block and a multiple of 4
--    const p_copy_kept *k = to_tex ? copy_kept(c) : NULL;
-+    const p_copy_kept *k = to_tex ? copy_kept(c) : NULL; int taken = 0;
-     if (k) {   // the recording kept the source bytes (hle_nvn.c copy_keep), as the game reuses its staging block at once: upload them, tightly packed, from scratch memory
-         size_t wb = (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb, kr = (size_t)k->row, ki = (size_t)k->img;
-         if (kr < wb || ki * (size_t)(nz - 1) + kr * (rows - 1) + wb > k->n) {
-@@ -1229,7 +1231,12 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
-         }
-         if (!vka_scratch(wb * rows * (size_t)nz, al * 16, &s)) return;
-         for (int z = 0; z < nz; z++) for (size_t y = 0; y < rows; y++) memcpy(s.ptr + (z * rows + y) * wb, k->data + z * ki + y * kr, wb);
-+        if (vka_astc_copy_clean_on(im)) { vka_astc_copy_clean(im, s.ptr, wb * rows * (size_t)nz, "buffer → texture (kept bytes)", tlv, l0 + (unsigned)c->r.zoffset); taken = 1; }
-         b = s.buf; o = s.off; row = wb; img = wb * rows;
-+    } else if (to_tex && asp == VK_IMAGE_ASPECT_COLOR_BIT && vka_astc_copy_clean_on(im) &&   // (the experiment: the source read and cleaned on the CPU)
-+               vka_astc_copy_take(im, c->src, span, row, img, rows, nz, (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb, al * 16, &s, tlv, l0 + (unsigned)c->r.zoffset)) {
-+        size_t wb = (size_t)((c->r.width + f->bw - 1) / f->bw) * f->bpb;
-+        b = s.buf; o = s.off; row = wb; img = wb * rows; taken = 1;
-     } else if (!vka_addr(c->src, span, &b, &o, NULL)) { static _Atomic int nr; if (atomic_fetch_add(&nr, 1) < 8) VRED("%s at %#llx (%llu bytes) is not in placed guest RAM", to_tex ? "buffer → texture copy source" : "texture → buffer copy destination", (unsigned long long)c->src, (unsigned long long)span); return; }
-     int bounce = o % al != 0 || (img % row) != 0;   // Vulkan wants block-aligned offsets and layers a whole number of rows apart
-     if (bounce) {
-@@ -1243,7 +1250,10 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
+@@ -1243,7 +1245,10 @@ static void copy_bt(const p_copy_b2t *c, int to_tex) {
      for (int z = 0; z < (is3d ? 1 : nz) && n < 64; z++)
          rg[n++] = (VkBufferImageCopy){(bounce ? s.off : o) + (is3d ? 0 : z * img), (uint32_t)(row / f->bpb * f->bw), (uint32_t)(img / row * f->bh),
              {asp, lv, is3d ? 0 : l0 + (uint32_t)c->r.zoffset + (uint32_t)z, 1}, {c->r.xoffset, c->r.yoffset, is3d ? c->r.zoffset : 0}, {(uint32_t)c->r.width, (uint32_t)c->r.height, is3d ? (uint32_t)nz : 1}};
 -    if (to_tex) { vk.vkCmdCopyBufferToImage(g_cb, bounce ? s.buf : b, im->img, VK_IMAGE_LAYOUT_GENERAL, (uint32_t)n, rg); vka_img_written(im); }
 +    if (to_tex) {
 +        vk.vkCmdCopyBufferToImage(g_cb, bounce ? s.buf : b, im->img, VK_IMAGE_LAYOUT_GENERAL, (uint32_t)n, rg); vka_img_written(im);
-+        if (vka_caud_on()) vka_caud_copy(taken ? 4 : 3, NULL, im, 0, tlv, 0, l0 + (unsigned)c->r.zoffset, (unsigned)nz, 0, 0, c->r.xoffset, c->r.yoffset, c->r.width, c->r.height);
++        if (vka_caud_on()) vka_caud_copy(3, NULL, im, 0, tlv, 0, l0 + (unsigned)c->r.zoffset, (unsigned)nz, 0, 0, c->r.xoffset, c->r.yoffset, c->r.width, c->r.height);
 +    }
      else {
          vka_tex_gw_opaque(c->src, span);
          vk.vkCmdCopyImageToBuffer(g_cb, im->img, VK_IMAGE_LAYOUT_GENERAL, bounce ? s.buf : b, (uint32_t)n, rg);
-@@ -1342,7 +1352,10 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -1342,7 +1347,10 @@ static void copy_t2t(const p_copy_t2t *c) {
      unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
      unsigned sz0 = c->has_sv && c->sv.set_layers ? c->sv.min_layer : 0, dz0 = c->has_dv && c->dv.set_layers ? c->dv.min_layer : 0;
      vka_tex_soft_copy(s, -1, g_cb); vka_tex_soft_copy(d, (int)dl, g_cb);   // (a soft texture copied from, or into at level 0: made whole first)
@@ -133,7 +108,7 @@ index 66e17d3f..ba3b0c31 100644
      VkImageAspectFlags sa = s->aspect & (s->f.kind >= 3 ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), da = d->aspect;
      if ((sa == VK_IMAGE_ASPECT_COLOR_BIT) != (da == VK_IMAGE_ASPECT_COLOR_BIT)) { VRED_ONCE("texture copy between a color and a depth texture (formats %#x → %#x)", c->src->d.format, c->dst->d.format); return; }
      sa &= da;
-@@ -1357,6 +1370,7 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -1357,6 +1365,7 @@ static void copy_t2t(const p_copy_t2t *c) {
                 && s->samples == d->samples && s->f.bpb == d->f.bpb && s->f.bw == d->f.bw && s->f.bh == d->f.bh) {
          VkImageCopy r = {ss, {c->sr.xoffset, c->sr.yoffset, s3 ? c->sr.zoffset : 0}, ds, {c->dr.xoffset, c->dr.yoffset, d3 ? c->dr.zoffset : 0}, {(uint32_t)c->sr.width, (uint32_t)c->sr.height, s3 ? (uint32_t)nz : 1}};
          vk.vkCmdCopyImage(g_cb, s->img, VK_IMAGE_LAYOUT_GENERAL, d->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
@@ -141,7 +116,7 @@ index 66e17d3f..ba3b0c31 100644
      } else {   // a scaled, mirrored or format-changing copy: a blit (filtered with LINEAR_FILTER), or a draw into a depth format that is no blit destination (vka_t2tpath.h)
          VkFormatProperties dp; vk.vkGetPhysicalDeviceFormatProperties(V.pd, d->f.vk, &dp);
          int path = t2t_path(0, s->f.kind, d->f.kind, s->f.bw > 1 || d->f.bw > 1, s->samples > 1 || d->samples > 1, (dp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) != 0);
-@@ -1373,7 +1387,9 @@ static void copy_t2t(const p_copy_t2t *c) {
+@@ -1373,7 +1382,9 @@ static void copy_t2t(const p_copy_t2t *c) {
          VkFormatProperties fp; vk.vkGetPhysicalDeviceFormatProperties(V.pd, s->f.vk, &fp);
          VkFilter fl = (c->flags & NVN_COPY_FLAGS_LINEAR_FILTER_BIT) && sa == VK_IMAGE_ASPECT_COLOR_BIT && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
          vk.vkCmdBlitImage(g_cb, s->img, VK_IMAGE_LAYOUT_GENERAL, d->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r, fl);
@@ -152,10 +127,10 @@ index 66e17d3f..ba3b0c31 100644
      vka_barrier(g_cb);
  }
 diff --git a/dm/gfx/vk_android/vka_nanscan.c b/dm/gfx/vk_android/vka_nanscan.c
-index 44d32b05..66ba705e 100644
+index 44d32b05..88869842 100644
 --- a/dm/gfx/vk_android/vka_nanscan.c
 +++ b/dm/gfx/vk_android/vka_nanscan.c
-@@ -128,6 +128,72 @@ static void astc_check(VkCommandBuffer cb) {
+@@ -128,6 +128,185 @@ static void astc_check(VkCommandBuffer cb) {
      vka_barrier(cb);
      g_astc_state = 1;
  }
@@ -225,50 +200,135 @@ index 44d32b05..66ba705e 100644
 +    vka_barrier(cb);
 +    vka_after(fence, probe_report, NULL);
 +}
++// The copy audit's mip check (once a run): small mip-mapped textures of block-compressed formats, each with a known block per level, layer and place. One is filled as an
++// upload fills a texture (vkCmdCopyBufferToImage, a level and layer a call), a second by copies from it as a game's are (vkCmdCopyImage, a level and layer a call); then
++// every level and layer of both is sampled (the block's first texel) and copied out (its bytes), and the lines say per level how many blocks came back right each way.
++// Sizes that are no power of two are there for the levels a driver cannot reach by halving the first level's block count: RADV views a compressed image as an
++// uncompressed one of its blocks to copy into or out of it, and a level of 42 texels has 6 blocks of 8 where half of the 11 blocks of 85 texels is 5
++enum { MP_REC = 640, MP_OUT = 8 << 20, MP_BLK = 512 << 10, MP_STORE = 2 << 20 };
++typedef struct { int fmt; uint32_t bw, bh, w, h, layers, levels; const char *name; } mp_shape;
++static const mp_shape g_mps[] = {
++    {0x80, 8, 8, 128, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 4, 4, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 119, 128, 1, 8, "ASTC 8x8"},
++    {0x80, 8, 8, 128, 48, 4, 6, "ASTC 8x8"}, {0x80, 8, 8, 104, 127, 1, 7, "ASTC 8x8"}, {0x79, 4, 4, 85, 128, 1, 8, "ASTC 4x4"}, {0x44, 4, 4, 85, 128, 1, 8, "BC3"},
++};
++enum { MP_N = sizeof g_mps / sizeof *g_mps };
++typedef struct { uint8_t shape, img, level, layer; uint32_t w, h, bx, by; VkDeviceSize samp, rb; } mp_rec;   // samp: its texels in out (a vec4 each); rb: its blocks read back
++static struct { vka_span out, up, rb; mp_rec r[MP_REC]; int n; } g_mp;
++// The block at (x, y) of a level and layer, and the colour its texels have
++static void mp_block(const mp_shape *s, uint32_t level, uint32_t layer, uint32_t x, uint32_t y, uint8_t b[16], float e[4]) {
++    if (s->fmt == 0x44) {   // BC3: both alphas and both colours (RGB565) the same, every index 0
++        uint32_t a = 255 - 16 * layer, r5 = (2 * level + 1) & 31, g6 = (4 * (x & 15) + 2) & 63, b5 = (2 * (y & 15) + 1) & 31; uint16_t c = (uint16_t)(r5 << 11 | g6 << 5 | b5);
++        memset(b, 0, 16); b[0] = b[1] = (uint8_t)a; memcpy(b + 8, &c, 2); memcpy(b + 10, &c, 2);
++        e[0] = (float)(r5 << 3 | r5 >> 2) / 255.0f; e[1] = (float)(g6 << 2 | g6 >> 4) / 255.0f; e[2] = (float)(b5 << 3 | b5 >> 2) / 255.0f; e[3] = (float)a / 255.0f;
++        return;
++    }
++    const uint16_t c[4] = {(uint16_t)(0x2000 + 0x1000 * level), (uint16_t)(0x0800 + 0x0f00 * (x & 15)), (uint16_t)(0x0800 + 0x0f00 * (y & 15)), (uint16_t)(0xffff - 0x1000 * layer)};
++    probe_ve(b, 0, 3, 0x1fff, 0x1fff, 0x1fff, 0x1fff, c);   // an LDR void-extent block without an extent: the check above samples those right
++    for (int k = 0; k < 4; k++) e[k] = (float)c[k] / 65535.0f;
++}
++static void mp_report(void *arg) {
++    (void)arg;
++    for (unsigned si = 0; si < MP_N; si++) {
++        const mp_shape *s = &g_mps[si]; uint32_t bx0 = (s->w + s->bw - 1) / s->bw, by0 = (s->h + s->bh - 1) / s->bh;
++        for (uint32_t lv = 0; lv < s->levels; lv++) {
++            uint32_t tot[2] = {0, 0}, sok[2] = {0, 0}, serr[2] = {0, 0}, rok[2] = {0, 0}, w = 0, h = 0, bx = 0, by = 0; char first[2][200] = {"", ""};
++            for (int i = 0; i < g_mp.n; i++) {
++                const mp_rec *r = &g_mp.r[i]; if (r->shape != si || r->level != lv) continue;
++                const float *t = (const float *)(g_mp.out.ptr + r->samp); const uint8_t *rb = g_mp.rb.ptr + r->rb; w = r->w; h = r->h; bx = r->bx; by = r->by;
++                for (uint32_t y = 0; y < r->by; y++) for (uint32_t x = 0; x < r->bx; x++) {
++                    uint8_t b[16]; float e[4]; mp_block(s, lv, r->layer, x, y, b, e);
++                    const float *v = t + 4 * ((size_t)(y * s->bh) * r->w + x * s->bw); int ok = 1;
++                    for (int k = 0; k < 4; k++) { float d = v[k] - e[k]; if (d < -0.012f || d > 0.012f) ok = 0; }
++                    tot[r->img]++; sok[r->img] += (uint32_t)ok; serr[r->img] += !ok && v[0] > 0.99f && v[1] < 0.01f && v[2] > 0.99f && v[3] > 0.99f;
++                    rok[r->img] += !memcmp(rb + 16 * ((size_t)y * r->bx + x), b, 16);
++                    if (!ok && !first[r->img][0]) snprintf(first[r->img], sizeof first[0], " (first wrong: layer %u block %u,%u samples (%.3f, %.3f, %.3f, %.3f), has (%.3f, %.3f, %.3f, %.3f))",
++                                                           r->layer, x, y, v[0], v[1], v[2], v[3], e[0], e[1], e[2], e[3]);
++                }
++            }
++            if (!tot[0] && !tot[1]) continue;
++            int halves = (bx0 >> lv ? bx0 >> lv : 1) >= bx && (by0 >> lv ? by0 >> lv : 1) >= by;
++            VLOG("copy audit: mip check: %s %ux%u x%u level %u (%ux%u, %ux%u blocks%s): uploaded: %u of %u blocks sample right, %u as the error colour, %u read back right%s; copied from it: %u of %u sample right, %u as the error colour, %u read back right%s",
++                 s->name, s->w, s->h, s->layers, lv, w, h, bx, by, halves ? "" : ", more than the first level's halved", sok[0], tot[0], serr[0], rok[0], first[0], sok[1], tot[1], serr[1], rok[1], first[1]);
++        }
++    }
++}
++void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence) {
++    static int done; if (done) return;
++    done = 1;
++    static uint8_t store[MP_STORE]; static tex_t tx[2 * MP_N]; size_t so = 0;   // (the textures' storage: zeros; their content is the copies below)
++    if (!V.push_desc || !ready() || !vka_static(MP_OUT, V.sb_align, &g_mp.out) || !vka_static(MP_BLK, 16, &g_mp.up) || !vka_static(MP_BLK, 16, &g_mp.rb)) { VLOG("copy audit: mip check: not run (push descriptors or memory)"); return; }
++    memset(g_mp.out.ptr, 0, MP_OUT); memset(g_mp.rb.ptr, 0, MP_BLK);
++    VkDeviceSize uo = 0, oo = 0, ro = 0, al = V.sb_align > 16 ? V.sb_align : 16;
++    for (unsigned si = 0; si < MP_N; si++) {
++        const mp_shape *s = &g_mps[si]; vka_img *ims[2] = {NULL, NULL}; int ok = 1;
++        for (int k = 0; k < 2 && ok; k++) {
++            tex_t *t = &tx[2 * si + k]; memset(t, 0, sizeof *t);
++            t->d.target = s->layers > 1 ? NVN_TEXTURE_TARGET_2D_ARRAY : NVN_TEXTURE_TARGET_2D; t->d.format = s->fmt; t->d.width = s->w; t->d.height = s->h; t->d.depth = s->layers; t->d.levels = s->levels;
++            nvn_tex_layout(&t->d, &t->L);
++            size_t need = ((size_t)t->L.size + 4095) & ~(size_t)4095;
++            if (!t->L.size || so + need > MP_STORE) { ok = 0; break; }
++            t->mem = store + so; so += need; t->serial = nvn_new_serial();
++            ims[k] = vka_tex_get(t, cb);
++            ok = ims[k] && ims[k]->levels == s->levels && ims[k]->layers == s->layers && !ims[k]->base && ims[k]->w == s->w && ims[k]->h == s->h;
++        }
++        if (!ok) { VLOG("copy audit: mip check: %s %ux%u x%u: no test texture", s->name, s->w, s->h, s->layers); continue; }
++        vka_tex_own(ims[0], cb); vka_tex_own(ims[1], cb); vka_barrier(cb);
++        for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as an upload
++            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
++            if (uo + (VkDeviceSize)bx * by * 16 > MP_BLK) continue;
++            for (uint32_t y = 0; y < by; y++) for (uint32_t x = 0; x < bx; x++) { float e[4]; mp_block(s, lv, ly, x, y, g_mp.up.ptr + uo + 16 * ((size_t)y * bx + x), e); }
++            VkBufferImageCopy rg = {g_mp.up.off + uo, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
++            vk.vkCmdCopyBufferToImage(cb, g_mp.up.buf, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
++            uo += (VkDeviceSize)bx * by * 16;
++        }
++        vka_img_written(ims[0]); vka_barrier(cb);
++        for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
++            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1;
++            VkImageCopy r = {{VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
++            vk.vkCmdCopyImage(cb, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, ims[1]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
++        }
++        vka_img_written(ims[1]); vka_barrier(cb);
++        for (int k = 0; k < 2; k++) for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
++            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
++            VkDeviceSize sn = (VkDeviceSize)w * h * 16, bn = (VkDeviceSize)bx * by * 16;
++            if (g_mp.n == MP_REC || oo + sn > MP_OUT || ro + bn > MP_BLK) continue;
++            VkImageView v = vka_view(ims[k], ims[k]->f.view, VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_IMAGE_ASPECT_COLOR_BIT, lv, 1, ly, 1, NULL);
++            if (!v) continue;
++            VkDescriptorImageInfo ii = {vka_samp_default(), v, VK_IMAGE_LAYOUT_GENERAL};
++            VkDescriptorBufferInfo bi = {g_mp.out.buf, g_mp.out.off + oo, sn};
++            VkWriteDescriptorSet wr[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii},
++                                          {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 1, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi}};
++            uint32_t pc[4] = {w, h, 0, 0};
++            vk.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_fetch);
++            vk.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_lay, 0, 2, wr);
++            vk.vkCmdPushConstants(cb, g_lay, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, pc);
++            vk.vkCmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
++            VkBufferImageCopy rg = {g_mp.rb.off + ro, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
++            vk.vkCmdCopyImageToBuffer(cb, ims[k]->img, VK_IMAGE_LAYOUT_GENERAL, g_mp.rb.buf, 1, &rg);
++            g_mp.r[g_mp.n++] = (mp_rec){(uint8_t)si, (uint8_t)k, (uint8_t)lv, (uint8_t)ly, w, h, bx, by, oo, ro};
++            oo = (oo + sn + al - 1) / al * al; ro += bn;
++        }
++        vka_barrier(cb);
++    }
++    vka_dyn_invalidate();
++    vka_after(fence, mp_report, NULL);
++}
  // One dispatch: level lv, layer l0 of im into the batch's next result
  static int scan_one(VkCommandBuffer cb, batch_t *b, vka_img *im, uint32_t lv, uint32_t l0, uint32_t pass, int bind, int tid, uint64_t stats) {
      if (b->n == MAXR) return 0;
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 9a3dd137..265fa5f3 100644
+index 9a3dd137..49554233 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -1139,10 +1139,15 @@ static const uint8_t dims[14][2] = {{4, 4}, {5, 4}, {5, 5}, {6, 5}, {6, 6}, {8,
- static uint64_t astc_clean(VkFormat v, uint8_t *p, size_t n) {
-     if (!is_astc(v)) return 0;
-     unsigned k = (unsigned)(v - VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
--    uint64_t nz = 0, nh = 0;
-+    uint64_t nz = 0, nh = 0, nv = 0; const int ve_fix = VKA_ENV("DM_VK_ASTC_VOID_EXTENT", 0) > 0;
-     for (size_t i = 0; i + 16 <= n; i += 16) {
-         uint64_t a, b; memcpy(&a, p + i, 8); memcpy(&b, p + i + 8, 8);
-         if (!(a | b)) { memcpy(p + i, k_astc_zero, 16); nz++; continue; }
-+        if ((a & 0xFFF) == 0xDFC && a >> 12 != 0xFFFFFFFFFFFFFull && ve_fix) {   // DM_VK_ASTC_VOID_EXTENT=1 (an experiment): an LDR void-extent block whose extent is illegal (a low
-+            uint64_t e = a >> 12;                                                // coordinate not below its high one: an error block by the specification) gets no extent, its colour kept
-+            if ((e & 0x1FFF) >= ((e >> 13) & 0x1FFF) || ((e >> 26) & 0x1FFF) >= ((e >> 39) & 0x1FFF)) { a |= 0xFFFFFFFFFFFFFull << 12; memcpy(p + i, &a, 8); nv++; }
-+            continue;
-+        }
-         if ((a & 0xDFF) != 0xDFC || !(a & 0x200)) continue;   // void-extent: bits 0-8 0x1FC, 10-11 set; bit 9 HDR
-         uint64_t c = 0; for (int k = 0; k < 4; k++) c |= (uint64_t)half_unorm16((uint16_t)(b >> 16 * k)) << 16 * k;
-         a &= ~(uint64_t)0x200; memcpy(p + i, &a, 8); memcpy(p + i + 8, &c, 8); nh++;
-@@ -1150,6 +1155,8 @@ static uint64_t astc_clean(VkFormat v, uint8_t *p, size_t n) {
-     nh += hk_astc_hdr_to_ldr(p, n / 16, dims[k / 2][0], dims[k / 2][1], (int)(k & 1));   // blocks of HDR endpoint modes: decoded and encoded as LDR
-     uint64_t bad = hk_astc_bad_to_zero(p, n / 16, dims[k / 2][0], dims[k / 2][1], (int)(k & 1));
-     static _Atomic int once; if (!atomic_exchange(&once, 1)) VLOG("ASTC uploads: all-zero blocks become zero texels, HDR blocks LDR ones (Hokkaido)");
-+    if (nv) { static _Atomic uint64_t tv; uint64_t v0 = atomic_fetch_add(&tv, nv), v1 = v0 + nv;
-+        if (!v0 || 63 - __builtin_clzll(v1) != 63 - __builtin_clzll(v0)) VLOG("ASTC uploads: %llu void-extent blocks with an illegal extent given none so far (format %d, this upload %llu of %zu)", (unsigned long long)v1, (int)v, (unsigned long long)nv, n / 16); }
-     if (!nz && !nh) return bad;
-     uint64_t z0 = atomic_fetch_add(&g_astc_zero, nz), h0 = atomic_fetch_add(&g_astc_hdr, nh), z1 = z0 + nz, h1 = h0 + nh;
-     if (63 - __builtin_clzll(z1 | 1) != 63 - __builtin_clzll(z0 | 1) || 63 - __builtin_clzll(h1 | 1) != 63 - __builtin_clzll(h0 | 1))   // a line per power of two crossed
-@@ -3335,6 +3342,9 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -3335,6 +3335,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
              if (vka_scratch(w->size, 16, &s)) {
                  for (int j = 0; j < i; j++) if (reg_write_overlap(&g_reg_writes[j], w)) { vka_barrier(cb); break; }
                  memcpy(s.ptr, w->data, w->size);
-+                int cl = vka_astc_copy_clean_on(im);   // (the experiment)
-+                if (cl) vka_astc_copy_clean(im, s.ptr, w->size, "WriteTexels", w->level, w->layer);
-+                if (vka_caud_on()) vka_caud_copy(cl ? 6 : 5, NULL, im, 0, w->level, 0, w->layer, 1, 0, 0, w->x, w->y, (int)w->w, (int)w->h);
++                if (vka_caud_on()) vka_caud_copy(5, NULL, im, 0, w->level, 0, w->layer, 1, 0, 0, w->x, w->y, (int)w->w, (int)w->h);
                  VkBufferImageCopy c = {
                      .bufferOffset = s.off,
                      .bufferRowLength = 0,
-@@ -3682,4 +3692,212 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -3682,4 +3683,187 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
               done ? how : "nothing readable", done ? "" : ": zeros");
      if (im) vka_tex_drop(im);
  }
@@ -285,7 +345,7 @@ index 9a3dd137..265fa5f3 100644
 +static ca_key g_cak[CA_KEYS]; static int g_ncak;
 +static uint64_t g_ca_src[CA_SRC]; static int g_nca_src;   // ASTC textures a copy read: scanned too (replay thread)
 +static const char *const ca_kinds[] = {"texture → texture", "texture → texture, dropped (a level its image does not hold)", "texture → texture, as a blit", "buffer → texture",
-+                                       "buffer → texture, read and cleaned on the CPU", "WriteTexels", "WriteTexels, cleaned"};
++                                       "texture → texture, from the source's storage", "WriteTexels"};
 +void hk_astc_count(const uint8_t *data, size_t n, unsigned bw, unsigned bh, uint32_t out[7]);   // vka_astc_hdr.cpp
 +int vka_caud_on(void) { return VKA_ENV("DM_VK_COPY_AUDIT", 0) > 0; }
 +static void ca_state(const vka_img *im, char *o, size_t n) {
@@ -406,6 +466,7 @@ index 9a3dd137..265fa5f3 100644
 +    if (!vka_caud_on() || !cb) return;
 +    uint64_t fr = vka_frame();
 +    vka_astc_probe(cb, fence);   // (once: how this device samples the blocks counted below)
++    if (fr >= 2) vka_astc_mip_probe(cb, fence);   // (once, in a later submission: whether it writes and samples every level of a mip-mapped texture alike)
 +    ca_copies_report(fr);
 +    if (!g_cas.active) {
 +        if (fr < g_cas.next) return;
@@ -453,31 +514,5 @@ index 9a3dd137..265fa5f3 100644
 +    b->pass = g_cas.pass; b->nimg = (uint32_t)g_cas.n; b->unread = g_cas.unread; b->f0 = g_cas.f0; b->frame = fr;
 +    atomic_store(&b->busy, 1);
 +    vka_after(fence, ca_scan_report, b);
-+}
-+// DM_VK_ASTC_CLEAN_COPIES=1 (an experiment, Hokkaido): the bytes a copy brings into an ASTC image go through astc_clean, as an upload from guest storage does
-+int vka_astc_copy_clean_on(const vka_img *im) { return is_astc(im->f.vk) && VKA_ENV("DM_VK_ASTC_CLEAN_COPIES", 0) > 0; }
-+void vka_astc_copy_clean(const vka_img *im, uint8_t *p, size_t n, const char *what, uint32_t level, uint32_t layer) {
-+    unsigned k = (unsigned)(im->f.vk - VK_FORMAT_ASTC_4x4_UNORM_BLOCK); uint32_t c[7] = {0};
-+    hk_astc_count(p, n / 16, dims[k / 2][0], dims[k / 2][1], c);
-+    astc_clean(im->f.vk, p, n & ~(size_t)15);
-+    static _Atomic int lines;
-+    if ((c[0] | c[1] | c[2] | c[4] | c[6]) && atomic_fetch_add(&lines, 1) < 400)
-+        VLOG("ASTC copy cleaned: %s into serial %llu format %#x level %u layer %u: of %zu blocks %u all-zero, %u HDR void-extent, %u of an HDR endpoint mode, %u no ASTC data, %u void-extent with an illegal extent",
-+             what, (unsigned long long)im->serial, im->d.format, level, layer, n / 16, c[0], c[2], c[4], c[1], c[6]);
-+}
-+// The experiment's buffer → texture copy: nz slices of rows rows (row bytes apart, slices img bytes apart) of the guest buffer at src, as the GPU would read them here, into
-+// scratch memory, wb bytes a row, tightly packed, and cleaned. 0 = not known on the CPU (not placed guest RAM, or a GPU write into the range has not landed): the caller
-+// copies as before
-+int vka_astc_copy_take(const vka_img *im, uint64_t src, uint64_t span, size_t row, size_t img, size_t rows, int nz, size_t wb, VkDeviceSize align, vka_span *s, uint32_t level, uint32_t layer) {
-+    int packed = row == wb && img == wb * rows, ok = 0;   // (packed: span is the scratch size)
-+    uint8_t *t = packed ? NULL : malloc(span);
-+    if (!packed && !t) return 0;
-+    nvn_pool_use(1);   // (the buffer's pool is not finalized, and its memory unmapped, under the read)
-+    if (vka_addr(src, span, NULL, NULL, NULL) && vka_tex_gw_read(src, span, NULL) && vka_scratch(wb * rows * (size_t)nz, align, s)) ok = vka_tex_gw_read(src, span, t ? t : s->ptr);
-+    nvn_pool_use(0);
-+    if (ok && t) for (int z = 0; z < nz; z++) for (size_t y = 0; y < rows; y++) memcpy(s->ptr + ((size_t)z * rows + y) * wb, t + (size_t)z * img + y * row, wb);
-+    free(t);
-+    if (ok) vka_astc_copy_clean(im, s->ptr, wb * rows * (size_t)nz, "buffer → texture", level, layer);
-+    return ok;
 +}
  #endif
