@@ -97,6 +97,9 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   from the level above; HDR endpoint modes are re-encoded as LDR
   (`native_patches/0001-astc-error-colour-blocks.patch`).
 - **Depth bias** kept where a D24 target is made D32F (`native_patches/0002-d24-depth-bias.patch`).
+- **Mario Kart World stopping after a race**, before the result movie (upstream: about one race in
+  five on 1.0.0): Banana Native's fix from its v0.3.52 preview, taken alone
+  (`native_patches/0004-codec-registered-buffers.patch`). Not run on a phone here.
 - **Soft textures** shows and keeps the game's default (Mario Kart World's profile has them on)
   instead of holding it off.
 - **Mario Kart World, pink road paint at a distance (open):** on an S26 the road paint and the

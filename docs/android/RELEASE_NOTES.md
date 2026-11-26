@@ -59,6 +59,8 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **Pink textures:** ASTC blocks that hold no ASTC data become transparent instead of pink; a
   texture read while the game rewrites it keeps its last whole content.
 - A constant depth bias is kept where a D24 target is made D32F.
+- **Mario Kart World** stopping after a race, before the result movie (upstream saw it in about
+  one race in five): Banana Native's fix from its v0.3.52 preview is in. Not yet run on a phone.
 - Shaders built before these fixes are dropped once and built again while you play.
 - The game hosts are built from Banana Native's source with these patches.
 
