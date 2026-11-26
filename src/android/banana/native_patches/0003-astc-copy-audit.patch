@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
-index de7b3026..7a212748 100644
+index de7b3026..d286214c 100644
 --- a/dm/gfx/vk_android/vka.h
 +++ b/dm/gfx/vk_android/vka.h
-@@ -373,6 +373,13 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
+@@ -373,6 +373,14 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
  // Before a copy out of im, or into its texture level dst_level (-1: a copy out of it): a soft texture (vka_soft.h) the game copies from, or into at its finest level, is made
  // whole again from its storage and stays whole (vka_tex.c soft_harden). Any thread that records; no render pass may be open in cb unless upload batches are on
  void vka_tex_soft_copy(vka_img *im, int dst_level, VkCommandBuffer cb);
@@ -13,14 +13,23 @@ index de7b3026..7a212748 100644
 +void vka_caud_scan(VkCommandBuffer cb, uint64_t fence);
 +void vka_astc_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: how the device samples the kinds of ASTC blocks an upload takes out, once
 +void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: every level of small mip-mapped compressed textures written as an upload and as a copy write them, then sampled and read back, once
++int vka_fetch_level(VkCommandBuffer cb, vka_img *im, VkFormat fmt, uint32_t lv, uint32_t ly, uint32_t w, uint32_t h, VkBuffer buf, VkDeviceSize off);   // vka_nanscan.c: a level and layer as the device samples it (a vec4 a texel)
  void vka_tex_soft_stats(char *b, size_t n);          // soft textures now: how many, the storage bytes their finest levels take, and how many went whole
  void vka_tex_big_stats(char *b, size_t n);           // the largest images the GPU has not written, with what sampled them and what lies over their storage (DM_VK_BIGIMG_MB)
  void vka_tex_kind_log(void);                          // log lines: the live images by content and by why the cache keeps them, and the largest (the ctl stats)
 diff --git a/dm/gfx/vk_android/vka_astc_hdr.cpp b/dm/gfx/vk_android/vka_astc_hdr.cpp
-index 607b5f95..36e8ef5f 100644
+index 607b5f95..5a87c1a0 100644
 --- a/dm/gfx/vk_android/vka_astc_hdr.cpp
 +++ b/dm/gfx/vk_android/vka_astc_hdr.cpp
-@@ -156,6 +156,43 @@ extern "C" double hk_astc_bad_share(const uint8_t *data, size_t n, unsigned bw,
+@@ -5,6 +5,7 @@
+ // encoded again with the LDR one (astcenc, dm/third_party/astcenc, Apache-2.0), in place
+ #include "astcenc.h"
+ #include <cstdint>
++#include <cstdio>
+ #include <cstring>
+ #include <mutex>
+ #include <vector>
+@@ -156,6 +157,99 @@ extern "C" double hk_astc_bad_share(const uint8_t *data, size_t n, unsigned bw,
      return n ? (double)bad / (double)n : 0.0;
  }
  
@@ -59,6 +68,62 @@ index 607b5f95..36e8ef5f 100644
 +    }
 +    for (astcenc_context *x : c) if (x) astcenc_context_free(x);
 +    return ok ? 1 | (maybe_hdr(out[1]) && !surely_bad(out[1], 4, 4) ? 2 : 0) : 0;
++}
++
++// The copy audit's reference decoder (vka_tex.c "Copy audit"): astcenc with the LDR profile, which reads an error block and a block of the HDR profile as the error
++// colour (1, 0, 1, 1), as a driver without the HDR profile does. One context a block size, kept
++static astcenc_context *ldr_dec(unsigned bw, unsigned bh) {   // (g_mu held)
++    static astcenc_context *c[13][13]; static bool tried[13][13];
++    if (bw < 4 || bw > 12 || bh < 4 || bh > 12) return nullptr;
++    if (!tried[bw][bh]) { tried[bw][bh] = true; c[bw][bh] = make(ASTCENC_PRF_LDR, bw, bh, ASTCENC_FLG_DECOMPRESS_ONLY, ASTCENC_PRE_FASTEST); }
++    return c[bw][bh];
++}
++// A level of w x h texels (its blocks row by row) as the reference decodes it: out takes w * h RGBA floats, the stored values (sRGB-encoded for an sRGB texture); an
++// error block's texels are NaN, a block of the HDR profile's (1, 0, 1, 1). 1 = done
++extern "C" int hk_astc_decode(const uint8_t *data, unsigned w, unsigned h, unsigned bw, unsigned bh, float *out) {
++    std::lock_guard<std::mutex> lock(g_mu);
++    astcenc_context *c = ldr_dec(bw, bh);
++    if (!c) return 0;
++    const astcenc_swizzle swz = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
++    void *slice = out; astcenc_image img = {w, h, 1, ASTCENC_TYPE_F32, &slice};
++    size_t n = (size_t)((w + bw - 1) / bw) * ((h + bh - 1) / bh);
++    int ok = astcenc_decompress_image(c, data, 16 * n, &img, &swz, 0) == ASTCENC_SUCCESS;
++    astcenc_decompress_reset(c);
++    return ok;
++}
++// Of n blocks, every step-th: → how many the reference decoder reads as error blocks or blocks of the HDR profile (magenta on a driver without that profile);
++// *seen: how many were looked at; mean: the mean colour of up to 64 of the blocks, evenly spaced, as the reference decodes them (0..1, the stored values)
++extern "C" uint32_t hk_astc_look(const uint8_t *data, size_t n, unsigned bw, unsigned bh, unsigned step, uint32_t *seen, float mean[4]) {
++    std::lock_guard<std::mutex> lock(g_mu);
++    astcenc_context *c = ldr_dec(bw, bh); uint32_t bad = 0, ns = 0;
++    mean[0] = mean[1] = mean[2] = mean[3] = 0;
++    if (!c || !n) { if (seen) *seen = 0; return 0; }
++    if (!step) step = 1;
++    for (size_t i = 0; i < n; i += step) { astcenc_block_info bi; ns++; if (astcenc_get_block_info(c, data + 16 * i, &bi) != ASTCENC_SUCCESS || bi.is_error_block || maybe_hdr(data + 16 * i)) bad++; }   // (the LDR profile reports no HDR block: by the header)
++    if (seen) *seen = ns;
++    size_t k = n < 64 ? n : 64; std::vector<uint8_t> blocks(16 * k); std::vector<float> px(k * bw * bh * 4);
++    for (size_t j = 0; j < k; j++) memcpy(&blocks[16 * j], data + 16 * (j * n / k), 16);
++    const astcenc_swizzle swz = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
++    void *slice = px.data(); astcenc_image img = {unsigned(k * bw), bh, 1, ASTCENC_TYPE_F32, &slice};   // the blocks side by side
++    if (astcenc_decompress_image(c, blocks.data(), blocks.size(), &img, &swz, 0) == ASTCENC_SUCCESS) {
++        double s[4] = {0, 0, 0, 0}; size_t nt = k * bw * bh;
++        for (size_t t = 0; t < nt; t++) for (int q = 0; q < 4; q++) { float v = px[4 * t + q]; s[q] += v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f; }
++        for (int q = 0; q < 4; q++) mean[q] = (float)(s[q] / (double)nt);
++    }
++    astcenc_decompress_reset(c);
++    return bad;
++}
++// A block in words, for a log line: what the reference decoder says it is
++extern "C" void hk_astc_describe(const uint8_t *b, unsigned bw, unsigned bh, char *out, size_t n) {
++    std::lock_guard<std::mutex> lock(g_mu);
++    astcenc_context *c = ldr_dec(bw, bh); astcenc_block_info bi;
++    char hex[40]; for (int i = 0; i < 16; i++) snprintf(hex + 2 * i, 3, "%02x", b[i]);
++    if (!c || astcenc_get_block_info(c, b, &bi) != ASTCENC_SUCCESS) { snprintf(out, n, "%s (no reference decoder)", hex); return; }
++    if (bi.is_error_block) snprintf(out, n, "%s: an error block to the reference decoder%s", hex, surely_bad(b, bw, bh) ? " (by its header)" : " (its header passes)");
++    else if (bi.is_constant_block) snprintf(out, n, "%s: a void-extent block%s", hex, maybe_hdr(b) ? " (HDR)" : "");
++    else snprintf(out, n, "%s: %u partition(s), %s, weights %ux%u, endpoint modes %u %u %u %u%s", hex, bi.partition_count, bi.is_dual_plane_block ? "two planes" : "one plane", bi.weight_x, bi.weight_y,
++                  bi.color_endpoint_modes[0], bi.partition_count > 1 ? bi.color_endpoint_modes[1] : 0, bi.partition_count > 2 ? bi.color_endpoint_modes[2] : 0,
++                  bi.partition_count > 3 ? bi.color_endpoint_modes[3] : 0, maybe_hdr(b) ? " (an HDR endpoint mode)" : "");
 +}
 +
  // The all-zero blocks of an ASTC level (w x h texels) filled from the level above it (pw x ph, its blocks as uploaded): that level decoded, halved with a box
@@ -127,10 +192,10 @@ index 66e17d3f..56f1af1b 100644
      vka_barrier(g_cb);
  }
 diff --git a/dm/gfx/vk_android/vka_nanscan.c b/dm/gfx/vk_android/vka_nanscan.c
-index 44d32b05..88869842 100644
+index 44d32b05..e3b6dbc6 100644
 --- a/dm/gfx/vk_android/vka_nanscan.c
 +++ b/dm/gfx/vk_android/vka_nanscan.c
-@@ -128,6 +128,185 @@ static void astc_check(VkCommandBuffer cb) {
+@@ -128,6 +128,202 @@ static void astc_check(VkCommandBuffer cb) {
      vka_barrier(cb);
      g_astc_state = 1;
  }
@@ -281,13 +346,13 @@ index 44d32b05..88869842 100644
 +            vk.vkCmdCopyBufferToImage(cb, g_mp.up.buf, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
 +            uo += (VkDeviceSize)bx * by * 16;
 +        }
-+        vka_img_written(ims[0]); vka_barrier(cb);
++        vka_barrier(cb);   // (not marked GPU-written: nothing uploads these again, and the scan leaves them out)
 +        for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
 +            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1;
 +            VkImageCopy r = {{VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
 +            vk.vkCmdCopyImage(cb, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, ims[1]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
 +        }
-+        vka_img_written(ims[1]); vka_barrier(cb);
++        vka_barrier(cb);
 +        for (int k = 0; k < 2; k++) for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
 +            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
 +            VkDeviceSize sn = (VkDeviceSize)w * h * 16, bn = (VkDeviceSize)bx * by * 16;
@@ -313,14 +378,39 @@ index 44d32b05..88869842 100644
 +    vka_dyn_invalidate();
 +    vka_after(fence, mp_report, NULL);
 +}
++// The copy audit's scan (vka_tex.c): level lv, layer ly of im (w x h texels) as the device samples it through a view of format fmt, into buf at off (a vec4 a
++// texel). 1 = recorded (the caller's barrier and vka_dyn_invalidate follow its last one)
++int vka_fetch_level(VkCommandBuffer cb, vka_img *im, VkFormat fmt, uint32_t lv, uint32_t ly, uint32_t w, uint32_t h, VkBuffer buf, VkDeviceSize off) {
++    if (!V.push_desc || !ready()) return 0;
++    VkImageView v = vka_view(im, fmt, VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_IMAGE_ASPECT_COLOR_BIT, lv, 1, ly, 1, NULL);
++    if (!v) return 0;
++    VkDescriptorImageInfo ii = {vka_samp_default(), v, VK_IMAGE_LAYOUT_GENERAL};
++    VkDescriptorBufferInfo bi = {buf, off, (VkDeviceSize)w * h * 16};
++    VkWriteDescriptorSet wr[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 0, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii},
++                                  {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = 1, .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bi}};
++    uint32_t pc[4] = {w, h, 0, 0};
++    vk.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_fetch);
++    vk.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_lay, 0, 2, wr);
++    vk.vkCmdPushConstants(cb, g_lay, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, pc);
++    vk.vkCmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
++    return 1;
++}
  // One dispatch: level lv, layer l0 of im into the batch's next result
  static int scan_one(VkCommandBuffer cb, batch_t *b, vka_img *im, uint32_t lv, uint32_t l0, uint32_t pass, int bind, int tid, uint64_t stats) {
      if (b->n == MAXR) return 0;
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 9a3dd137..49554233 100644
+index 9a3dd137..3ed8bd21 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -3335,6 +3335,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -8,6 +8,7 @@
+ #include "vka.h"
+ #include "vka_poolslot.h"
+ #include "../nvn/nvn_mtl.h"
++#include <math.h>
+ #include "../tex/nvn_deswizzle.h"
+ #include "../nvn/dmsh_abi_vk.h"
+ #include "../nvn/nvn_dirty.h"
+@@ -3335,6 +3336,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
              if (vka_scratch(w->size, 16, &s)) {
                  for (int j = 0; j < i; j++) if (reg_write_overlap(&g_reg_writes[j], w)) { vka_barrier(cb); break; }
                  memcpy(s.ptr, w->data, w->size);
@@ -328,7 +418,7 @@ index 9a3dd137..49554233 100644
                  VkBufferImageCopy c = {
                      .bufferOffset = s.off,
                      .bufferRowLength = 0,
-@@ -3682,4 +3683,187 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -3682,4 +3684,268 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
               done ? how : "nothing readable", done ? "" : ": zeros");
      if (im) vka_tex_drop(im);
  }
@@ -337,10 +427,9 @@ index 9a3dd137..49554233 100644
 +// takes them out (astc_clean), a copy does not. Where they come from and where they are:
 +// 1. Every copy with an ASTC texture on either side (texture → texture, buffer → texture, WriteTexels) is logged once per kind, textures and levels, and each image's
 +//    state once; every 900 frames, how many copies each of those took since and the destination layers they wrote.
-+// 2. A scan, every 600 frames: each ASTC image the GPU wrote, the game writes through WriteTexels, that is sparse or that a copy read has its levels of at most 256 KiB a
-+//    layer copied out of the image (CA_ARENA a submission) and, once the submission is done, counted by their headers (hk_astc_count). A level is logged when its counts
-+//    change; DM_VK_COPY_AUDIT_LINES (default 4000) bounds those lines. Not for play: the counting runs on the completion thread
-+enum { CA_KEYS = 4096, CA_SRC = 256, CA_SET = 160, CA_TOLD = 512, CA_BATCH = 6, CA_REC = 192, CA_ARENA = 3 << 20, CA_LAYER_MAX = 256 << 10, CA_SEEN = 4096 };
++// 2. A scan, every 600 frames, of what the ASTC images those copies touch hold and how the device samples them ("The scan" below).
++// DM_VK_COPY_AUDIT_LINES (default 4000) bounds the scan's lines. Not for play: it reads the images back
++enum { CA_KEYS = 4096, CA_SRC = 256, CA_SET = 448, CA_OWN = 192, CA_ROLL = 256, CA_TOLD = 512, CA_BATCH = 6, CA_REC = 192, CA_FETCHES = 512, CA_ARENA = 3 << 20, CA_LAYER_MAX = 256 << 10, CA_SEEN = 4096 };
 +typedef struct { uint64_t ss, ds, n, n_rep, lay[2], lay_rep[2]; uint32_t sl, dl; uint8_t kind, dirty; } ca_key;
 +static ca_key g_cak[CA_KEYS]; static int g_ncak;
 +static uint64_t g_ca_src[CA_SRC]; static int g_nca_src;   // ASTC textures a copy read: scanned too (replay thread)
@@ -405,17 +494,28 @@ index 9a3dd137..49554233 100644
 +        k->n_rep = k->n; k->lay_rep[0] = k->lay_rep[1] = 0; k->dirty = 0; lines++;
 +    }
 +}
-+// The scan. A batch is one submission's part of it: the levels copied out, read when its fence is done
-+typedef struct { uint64_t serial; uint32_t fmt, tw, th, layers, level, w, h, ly0, nly, nb, bw, bh, flags; VkDeviceSize off; } ca_rec;   // nb: blocks a layer; level: the texture's
++// The scan. Every 600 frames each ASTC image of the set (written by the GPU or through WriteTexels, sparse, or read by a copy) has its levels of at most 256 KiB a
++// layer copied out, and those of at most 64x64 texels also sampled by the device through the format the game's views use, CA_ARENA a submission. Once the submission is
++// done a worker thread looks at every level and layer: its blocks by header (hk_astc_count), what the reference decoder makes of them (blocks it reads as an error or
++// of the HDR profile, the mean colour), and for a sampled level, texel by texel, what the device returned against the reference. A level's line is logged the first
++// time and when its look changes: per layer the mean colour (as stored, RRGGBB and /AA when not opaque), then what is wrong, if anything. The other ASTC images
++// (uploaded from storage, in no copy) are looked at too, CA_ROLL of them a pass and their sampled levels only, and logged only when something is wrong
++enum { CA_FETCH_TEXELS = 64 * 64 };
++typedef struct { uint64_t serial; uint32_t fmt, tw, th, layers, level, il, w, h, ly0, nly, nb, bw, bh, flags; VkDeviceSize off, foff, fstep; uint8_t srgb, fetched; } ca_rec;   // nb: blocks a layer; level: the texture's, il: the image's
 +typedef struct { ca_rec r[CA_REC]; int n, have, last; _Atomic int busy; vka_span mem; uint32_t pass, nimg, unread; uint64_t f0, frame; } ca_batch;
 +static ca_batch g_cab[CA_BATCH];
-+static struct { uint64_t ser[CA_SET], next, f0; int n, cur, active; uint32_t lv, ly, pass, unread; } g_cas;   // (replay thread)
-+static pthread_mutex_t g_camu = PTHREAD_MUTEX_INITIALIZER;
-+static struct { uint64_t serial, sig; uint32_t level, ly0; } g_caseen[CA_SEEN]; static int g_ncaseen;   // under g_camu, as g_cap
-+static struct { uint32_t pass; uint64_t lay, bytes, zl, hl, bl; } g_cap;
-+static _Atomic int g_ca_lines;
-+static int ca_scanned(const vka_img *im) {   // caller holds g_tmu
-+    if (!im->img || !is_astc(im->f.vk) || im->par || im->samples > 1 || im->depth > 1 || im->d.target == NVN_TEXTURE_TARGET_3D || !(im->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return 0;
++static struct { uint64_t ser[CA_SET], next, f0; uint8_t minor[CA_SET]; int n, cur, active, roll; uint32_t lv, ly, pass, unread; } g_cas;   // (replay thread) minor: an image of no copy
++static struct { uint64_t serial, sig; uint32_t level, ly0; } g_caseen[CA_SEEN]; static int g_ncaseen;   // (the worker's, as g_cap)
++static struct { uint32_t pass; uint64_t lay, bytes, bad, dmag, diff; } g_cap;
++static _Atomic int g_ca_lines, g_ca_detail;
++int hk_astc_decode(const uint8_t *data, unsigned w, unsigned h, unsigned bw, unsigned bh, float *out);   // vka_astc_hdr.cpp
++uint32_t hk_astc_look(const uint8_t *data, size_t n, unsigned bw, unsigned bh, unsigned step, uint32_t *seen, float mean[4]);
++void hk_astc_describe(const uint8_t *b, unsigned bw, unsigned bh, char *out, size_t n);
++static int ca_scannable(const vka_img *im) {   // caller holds g_tmu
++    return im->img && is_astc(im->f.vk) && !im->par && im->samples <= 1 && im->depth <= 1 && im->d.target != NVN_TEXTURE_TARGET_3D && (im->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) && (im->usage & VK_IMAGE_USAGE_SAMPLED_BIT);
++}
++static int ca_scanned(const vka_img *im) {   // one a copy or WriteTexels wrote, a sparse one, or a copy's source: looked at every pass
++    if (!ca_scannable(im)) return 0;
 +    if (im->gpu_owned || im->wt || im->rs || im->vtrack || im->dcap) return 1;
 +    for (int i = 0; i < g_nca_src; i++) if (g_ca_src[i] == im->serial) return 1;
 +    return 0;
@@ -426,93 +526,164 @@ index 9a3dd137..49554233 100644
 +    for (uint32_t ty = 0; ty < nty; ty++) for (uint32_t tx = 0; tx < ntx; tx++) if (!vks_tile_bound(im->rs, i, ly, tx, ty)) return 0;
 +    return 1;
 +}
-+static void ca_scan_report(void *arg) {
-+    ca_batch *b = arg;
-+    pthread_mutex_lock(&g_camu);
++static float ca_enc(float v) { v = v > 0.0f ? (v < 1.0f ? v : 1.0f) : 0.0f; return v <= 0.0031308f ? 12.92f * v : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f; }   // linear → sRGB-encoded
++static int ca_magenta(const float *v) { return v[0] > 0.98f && v[1] < 0.02f && v[2] > 0.98f && v[3] > 0.98f; }
++static void ca_scan_report(ca_batch *b) {
 +    if (g_cap.pass != b->pass) { memset(&g_cap, 0, sizeof g_cap); g_cap.pass = b->pass; }
 +    for (int k = 0; k < b->n; k++) {
 +        const ca_rec *r = &b->r[k];
 +        static const uint8_t unrun[16] = {0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5};
 +        if (!memcmp(b->mem.ptr + r->off, unrun, 16)) { VRED_ONCE("copy audit: a scan's copy out of serial %llu level %u did not run (a submission that failed?): not counted", (unsigned long long)r->serial, r->level); continue; }
-+        char zs[420] = "", hs[420] = "", bs[420] = ""; size_t zo = 0, ho = 0, bo = 0; uint32_t nzl = 0, nhl = 0, nbl = 0, hve = 0, hem = 0, vp = 0, vx = 0, vi = 0; uint64_t sig = 1469598103934665603ull;
++        char cs[840] = "", bs[300] = "", ms[300] = "", ds[300] = ""; size_t co = 0, bo = 0, mo = 0, dn = 0; uint32_t nbl = 0, nml = 0, ndl = 0, hz = 0, hh = 0, hi = 0; uint64_t sig = 1469598103934665603ull;
++        float *ref = r->fetched ? malloc((size_t)r->w * r->h * 16) : NULL;
 +        for (uint32_t j = 0; j < r->nly; j++) {
-+            uint32_t c[7] = {0}; hk_astc_count(b->mem.ptr + r->off + (size_t)j * r->nb * 16, r->nb, r->bw, r->bh, c);
-+            uint32_t hdr = c[2] + c[4]; hve += c[2]; hem += c[4]; vp += c[3]; vx += c[5]; vi += c[6];
-+            sig = (sig ^ (c[0] | (uint64_t)c[1] << 20 | (uint64_t)hdr << 40)) * 1099511628211ull; sig = (sig ^ (c[5] | (uint64_t)c[6] << 32)) * 1099511628211ull;
-+            if (c[0]) { nzl++; if (zo + 24 < sizeof zs) zo += (size_t)snprintf(zs + zo, sizeof zs - zo, " %u:%u", r->ly0 + j, c[0]); }
-+            if (hdr) { nhl++; if (ho + 24 < sizeof hs) ho += (size_t)snprintf(hs + ho, sizeof hs - ho, " %u:%u", r->ly0 + j, hdr); }
-+            if (c[1]) { nbl++; if (bo + 24 < sizeof bs) bo += (size_t)snprintf(bs + bo, sizeof bs - bo, " %u:%u", r->ly0 + j, c[1]); }
++            const uint8_t *blk = b->mem.ptr + r->off + (size_t)j * r->nb * 16; uint32_t c[7] = {0}, seen = 0, ly = r->ly0 + j; float mean[4];
++            hk_astc_count(blk, r->nb, r->bw, r->bh, c); hz += c[0]; hh += c[2] + c[4]; hi += c[1] + c[6];
++            uint32_t bad = hk_astc_look(blk, r->nb, r->bw, r->bh, r->nb > 4096 ? 4 : 1, &seen, mean);
++            uint32_t q[4]; for (int t = 0; t < 4; t++) q[t] = (uint32_t)(mean[t] * 255.0f + 0.5f);
++            if (co + 20 < sizeof cs) { co += (size_t)snprintf(cs + co, sizeof cs - co, " %u:%02x%02x%02x", ly, q[0], q[1], q[2]); if (q[3] < 250) co += (size_t)snprintf(cs + co, sizeof cs - co, "/%02x", q[3]); }
++            sig = (sig ^ (q[0] >> 3 | (q[1] >> 3) << 8 | (q[2] >> 3) << 16 | (q[3] >> 3) << 24 | (uint64_t)bad << 32)) * 1099511628211ull;
++            if (bad) { nbl++; g_cap.bad++; if (bo + 24 < sizeof bs) bo += (size_t)snprintf(bs + bo, sizeof bs - bo, " %u:%u of %u", ly, bad, seen); }
++            g_cap.lay++; g_cap.bytes += (uint64_t)r->nb * 16;
++            const float *dev = r->fetched ? (const float *)(b->mem.ptr + r->foff + (size_t)j * r->fstep) : NULL;
++            if (!dev || !ref || dev[0] < -700.0f || !hk_astc_decode(blk, r->w, r->h, r->bw, r->bh, ref)) continue;   // (not sampled: the marker is still there)
++            uint32_t nmag = 0, ndiff = 0, nt = r->w * r->h, first = UINT32_MAX; int first_mag = 0;
++            for (uint32_t t = 0; t < nt; t++) {
++                const float *d = dev + 4 * (size_t)t, *e = ref + 4 * (size_t)t; float s[4] = {d[0], d[1], d[2], d[3]};
++                if (r->srgb) { s[0] = ca_enc(s[0]); s[1] = ca_enc(s[1]); s[2] = ca_enc(s[2]); }
++                int dm = ca_magenta(d), rm = e[0] != e[0] || ca_magenta(e), df = rm ? !dm : dm;   // (the reference's error block: NaN)
++                for (int u = 0; u < 4 && !rm && !df; u++) { float x = s[u] - e[u]; if (x < -0.06f || x > 0.06f) df = 1; }
++                nmag += (uint32_t)dm; ndiff += (uint32_t)df;
++                if ((df || dm) && (first == UINT32_MAX || (df && first_mag))) { first = t; first_mag = !df; }
++            }
++            sig = (sig ^ (nmag | (uint64_t)ndiff << 32)) * 1099511628211ull;
++            if (nmag) { nml++; g_cap.dmag++; if (mo + 24 < sizeof ms) mo += (size_t)snprintf(ms + mo, sizeof ms - mo, " %u:%u of %u", ly, nmag, nt); }
++            if (ndiff) { ndl++; g_cap.diff++; if (dn + 24 < sizeof ds) dn += (size_t)snprintf(ds + dn, sizeof ds - dn, " %u:%u of %u", ly, ndiff, nt); }
++            if (first != UINT32_MAX && atomic_fetch_add(&g_ca_detail, 1) < 96) {
++                uint32_t x = first % r->w, y = first / r->w, bx = (r->w + r->bw - 1) / r->bw; const float *d = dev + 4 * (size_t)first, *e = ref + 4 * (size_t)first; char what[260];
++                hk_astc_describe(blk + 16 * ((size_t)(y / r->bh) * bx + x / r->bw), r->bw, r->bh, what, sizeof what);
++                VLOG("copy audit: look: serial %llu format %#x level %u layer %u texel %u,%u: the device samples (%.3f, %.3f, %.3f, %.3f)%s, the reference reads (%.3f, %.3f, %.3f, %.3f); its block %s",
++                     (unsigned long long)r->serial, r->fmt, r->level, ly, x, y, d[0], d[1], d[2], d[3], r->srgb ? " through its sRGB view" : "", e[0], e[1], e[2], e[3], what);
++            }
 +        }
-+        g_cap.lay += r->nly; g_cap.bytes += (uint64_t)r->nly * r->nb * 16; g_cap.zl += nzl; g_cap.hl += nhl; g_cap.bl += nbl;
++        free(ref);
++        if ((r->flags & 32) && !(nbl | nml | ndl | hz | hh | hi)) continue;   // (an image of no copy with nothing wrong: no line)
++        sig = (sig ^ (hz | (uint64_t)hh << 20 | (uint64_t)hi << 40)) * 1099511628211ull;
 +        int e = 0; while (e < g_ncaseen && !(g_caseen[e].serial == r->serial && g_caseen[e].level == r->level && g_caseen[e].ly0 == r->ly0)) e++;
-+        int any = nzl || nhl || nbl || vx || vi, was = e < g_ncaseen;
-+        if (was ? g_caseen[e].sig == sig : !any) continue;   // unchanged, or clean and never logged
-+        if (!was) { if (g_ncaseen == CA_SEEN) continue; g_caseen[g_ncaseen].serial = r->serial; g_caseen[g_ncaseen].level = r->level; g_caseen[g_ncaseen].ly0 = r->ly0; g_ncaseen++; }
++        if (e < g_ncaseen && g_caseen[e].sig == sig) continue;   // as it looked before
++        if (e == g_ncaseen) { if (g_ncaseen == CA_SEEN) continue; g_caseen[e].serial = r->serial; g_caseen[e].level = r->level; g_caseen[e].ly0 = r->ly0; g_ncaseen++; }
 +        g_caseen[e].sig = sig;
 +        if (atomic_fetch_add(&g_ca_lines, 1) >= VKA_ENV("DM_VK_COPY_AUDIT_LINES", 4000)) continue;
-+        VLOG("copy audit: scan %u frame %llu: serial %llu format %#x %ux%ux%u%s%s%s%s%s level %u (%ux%u, %u blocks a layer) layers %u-%u: all-zero blocks in %u layers [%s ], HDR blocks in %u [%s ] (%u void-extent, %u of an HDR endpoint mode), blocks that are no ASTC data in %u [%s ] (layer:blocks); LDR void-extent blocks: %u without an extent, %u with one, %u with an illegal one",
-+             b->pass, (unsigned long long)b->frame, (unsigned long long)r->serial, r->fmt, r->tw, r->th, r->layers, r->flags & 1 ? " GPU-written" : "", r->flags & 2 ? " WriteTexels" : "",
-+             r->flags & 4 ? " residency" : "", r->flags & 8 ? " sparse" : "", r->flags & 16 ? " dense-capped" : "", r->level, r->w, r->h, r->nb, r->ly0, r->ly0 + r->nly - 1, nzl, zs, nhl, hs, hve, hem, nbl, bs, vp, vx, vi);
++        char wrong[1100] = ""; size_t wo = 0;
++        if (hz | hh | hi) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; by header %u all-zero, %u HDR, %u illegal blocks", hz, hh, hi);
++        if (nbl) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; blocks the reference reads as an error or HDR in %u layers [%s ]", nbl, bs);
++        if (r->fetched) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; sampled by the device: the error colour in %u layers [%s ], unlike the reference in %u [%s ]", nml, ms, ndl, ds);
++        VLOG("copy audit: look %u frame %llu: serial %llu format %#x %ux%ux%u%s%s%s%s%s level %u (%ux%u) layers %u-%u, mean colours%s%s", b->pass, (unsigned long long)b->frame, (unsigned long long)r->serial, r->fmt,
++             r->tw, r->th, r->layers, r->flags & 1 ? " GPU-written" : "", r->flags & 2 ? " WriteTexels" : "", r->flags & 4 ? " residency" : "", r->flags & 8 ? " sparse" : "", r->flags & 32 ? " (in no copy)" : r->flags & 16 ? " dense-capped" : "",
++             r->level, r->w, r->h, r->ly0, r->ly0 + r->nly - 1, cs, wrong);
 +    }
 +    if (b->last)
-+        VLOG("copy audit: scan %u (frames %llu-%llu): %u images, %llu levels x layers read (%.1f MiB), %u layers not read (tiles without memory); %llu with all-zero blocks, %llu with HDR blocks, %llu with blocks that are no ASTC data",
-+             b->pass, (unsigned long long)b->f0, (unsigned long long)b->frame, b->nimg, (unsigned long long)g_cap.lay, g_cap.bytes / 1048576.0, b->unread, (unsigned long long)g_cap.zl,
-+             (unsigned long long)g_cap.hl, (unsigned long long)g_cap.bl);
-+    pthread_mutex_unlock(&g_camu);
-+    atomic_store(&b->busy, 0);
++        VLOG("copy audit: look %u (frames %llu-%llu): %u images, %llu levels x layers (%.1f MiB of blocks), %u layers not read (tiles without memory); %llu with blocks the reference reads as an error or HDR, %llu where the device samples the error colour, %llu where it samples unlike the reference",
++             b->pass, (unsigned long long)b->f0, (unsigned long long)b->frame, b->nimg, (unsigned long long)g_cap.lay, g_cap.bytes / 1048576.0, b->unread, (unsigned long long)g_cap.bad,
++             (unsigned long long)g_cap.dmag, (unsigned long long)g_cap.diff);
 +}
-+// Before a submission ends (replay thread): the copies' report, and the scan's next part recorded into cb, read when fence is done
++// The worker: batches whose submission is done, in order (the completion thread only hands them over)
++static pthread_mutex_t g_cawmu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_cawcv = PTHREAD_COND_INITIALIZER;
++static ca_batch *g_cawq[CA_BATCH]; static int g_cawn, g_caw_up;
++static void *ca_worker(void *arg) {
++    (void)arg; pthread_setname_np(pthread_self(), "vk-audit");
++    for (;;) {
++        pthread_mutex_lock(&g_cawmu);
++        while (!g_cawn) pthread_cond_wait(&g_cawcv, &g_cawmu);
++        ca_batch *b = g_cawq[0]; g_cawn--; memmove(g_cawq, g_cawq + 1, (size_t)g_cawn * sizeof *g_cawq);
++        pthread_mutex_unlock(&g_cawmu);
++        ca_scan_report(b);
++        atomic_store(&b->busy, 0);
++    }
++    return NULL;
++}
++static void ca_scan_done(void *arg) {
++    pthread_mutex_lock(&g_cawmu);
++    if (g_cawn < CA_BATCH) g_cawq[g_cawn++] = arg;
++    pthread_cond_signal(&g_cawcv); pthread_mutex_unlock(&g_cawmu);
++}
++// Before a submission ends (replay thread): the copies' report, and the scan's next part recorded into cb, looked at once fence is done
 +void vka_caud_scan(VkCommandBuffer cb, uint64_t fence) {
 +    if (!vka_caud_on() || !cb) return;
 +    uint64_t fr = vka_frame();
-+    vka_astc_probe(cb, fence);   // (once: how this device samples the blocks counted below)
++    vka_astc_probe(cb, fence);   // (once: how this device samples the kinds of blocks an upload takes out)
 +    if (fr >= 2) vka_astc_mip_probe(cb, fence);   // (once, in a later submission: whether it writes and samples every level of a mip-mapped texture alike)
 +    ca_copies_report(fr);
 +    if (!g_cas.active) {
 +        if (fr < g_cas.next) return;
 +        pthread_mutex_lock(&g_tmu);
 +        g_cas.n = 0;
-+        for (int pass = 0; pass < 2; pass++) for (int i = 0; i < g_nlive && g_cas.n < CA_SET; i++) {   // the images copies or WriteTexels wrote and the sparse ones first, then the copies' sources
++        for (int pass = 0; pass < 2; pass++) for (int i = 0; i < g_nlive && g_cas.n < CA_OWN; i++) {   // the images copies or WriteTexels wrote and the sparse ones first, then the copies' sources
 +            const vka_img *im = g_live[i]; int own = im->gpu_owned || im->wt || im->rs || im->vtrack || im->dcap;
 +            if (!ca_scanned(im) || own != !pass) continue;
-+            g_cas.ser[g_cas.n++] = im->serial; ca_tell(im, "scanned");
++            g_cas.minor[g_cas.n] = 0; g_cas.ser[g_cas.n++] = im->serial; ca_tell(im, "scanned");
++        }
++        for (int k = 0, taken = 0, at = g_cas.roll; k < g_nlive && taken < CA_ROLL && g_cas.n < CA_SET; k++) {   // then a slice of the others, further on each pass
++            int i = (at + k) % g_nlive; const vka_img *im = g_live[i];
++            g_cas.roll = i + 1;
++            if (!ca_scannable(im) || ca_scanned(im)) continue;
++            g_cas.minor[g_cas.n] = 1; g_cas.ser[g_cas.n++] = im->serial; taken++;
 +        }
 +        pthread_mutex_unlock(&g_tmu);
 +        g_cas.next = fr + 600;
 +        if (!g_cas.n) return;
 +        g_cas.active = 1; g_cas.cur = 0; g_cas.lv = g_cas.ly = 0; g_cas.unread = 0; g_cas.pass++; g_cas.f0 = fr;
 +    }
++    if (!g_caw_up) { pthread_t th; if (pthread_create(&th, NULL, ca_worker, NULL)) { g_cas.active = 0; g_cas.next = UINT64_MAX; VRED("copy audit: no thread for the scan"); return; } pthread_detach(th); g_caw_up = 1; }
 +    ca_batch *b = NULL;
 +    for (int i = 0; i < CA_BATCH && !b; i++) if (!atomic_load(&g_cab[i].busy)) b = &g_cab[i];
-+    if (!b) return;   // (every batch waits for its submission: the next one goes on)
-+    if (!b->have) { if (!vka_static(CA_ARENA, 16, &b->mem)) { g_cas.active = 0; g_cas.next = UINT64_MAX; VRED("copy audit: no memory for the scan"); return; } b->have = 1; }
-+    b->n = 0; b->last = 0; VkDeviceSize used = 0; int barrier = 0;
++    if (!b) return;   // (every batch waits for its submission or the worker: the next submission goes on)
++    VkDeviceSize al = V.sb_align > 16 ? V.sb_align : 16, used = 0;
++    if (!b->have) { if (!vka_static(CA_ARENA, al, &b->mem)) { g_cas.active = 0; g_cas.next = UINT64_MAX; VRED("copy audit: no memory for the scan"); return; } b->have = 1; }
++    b->n = 0; b->last = 0;
++    static vka_img *tim[CA_REC];   // the batch's images, held from the choice under g_tmu to their commands (vka_view takes g_tmu itself)
++    uint32_t nfetch = 0;
 +    pthread_mutex_lock(&g_tmu);
 +    while (g_cas.cur < g_cas.n && b->n < CA_REC) {
-+        smap_ent *e = map_get(g_cas.ser[g_cas.cur]); vka_img *im = e ? e->im : NULL;
-+        if (!im || !ca_scanned(im) || g_cas.lv >= im->levels) { g_cas.cur++; g_cas.lv = g_cas.ly = 0; continue; }
++        smap_ent *e = map_get(g_cas.ser[g_cas.cur]); vka_img *im = e ? e->im : NULL; int minor = g_cas.minor[g_cas.cur];
++        if (!im || !ca_scannable(im) || g_cas.lv >= im->levels) { g_cas.cur++; g_cas.lv = g_cas.ly = 0; continue; }
 +        const vka_fmt *f = &im->f; uint32_t i = g_cas.lv, w = im->w >> i ? im->w >> i : 1, h = im->h >> i ? im->h >> i : 1, bx = (w + f->bw - 1) / f->bw, by = (h + f->bh - 1) / f->bh;
 +        VkDeviceSize per = (VkDeviceSize)bx * by * 16;
-+        if (per > CA_LAYER_MAX) { g_cas.lv++; g_cas.ly = 0; continue; }
++        if (per > CA_LAYER_MAX || (im->vtrack && i + im->base < im->vmin) || (minor && (uint64_t)w * h > CA_FETCH_TEXELS)) { g_cas.lv++; g_cas.ly = 0; continue; }   // (a sparse texture's views start at vmin)
 +        while (g_cas.ly < im->layers && !ca_bound(im, i, g_cas.ly, h)) { g_cas.ly++; g_cas.unread++; }
 +        if (g_cas.ly >= im->layers) { g_cas.lv++; g_cas.ly = 0; continue; }
-+        if (used + per > CA_ARENA) break;   // the next submission goes on here
-+        VkBufferImageCopy rg[64]; uint32_t n = 0, ly0 = g_cas.ly;
-+        while (g_cas.ly < im->layers && n < 64 && used + (n + 1) * per <= CA_ARENA && ca_bound(im, i, g_cas.ly, h)) {
-+            rg[n] = (VkBufferImageCopy){b->mem.off + used + n * per, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, i, g_cas.ly, 1}, {0, 0, 0}, {w, h, 1}}; n++; g_cas.ly++; }
-+        if (!barrier) { vka_barrier(cb); barrier = 1; }
-+        memset(b->mem.ptr + used, 0xA5, 16);   // (still there when the batch is read: the copy never ran, the record is not counted)
-+        vk.vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b->mem.buf, n, rg);
-+        b->r[b->n++] = (ca_rec){im->serial, (uint32_t)im->d.format, (uint32_t)im->d.width, (uint32_t)im->d.height, im->layers, i + im->base, w, h, ly0, n, bx * by, f->bw, f->bh,
-+                                (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0), used};
-+        used += n * per;
++        int fetch = V.push_desc && (uint64_t)w * h <= CA_FETCH_TEXELS;
++        VkDeviceSize fstep = fetch ? ((VkDeviceSize)w * h * 16 + al - 1) / al * al : 0;
++        if (used + per + fstep + al > CA_ARENA || (fetch && nfetch >= CA_FETCHES)) break;   // the next submission goes on here
++        uint32_t n = 0, ly0 = g_cas.ly;
++        while (g_cas.ly < im->layers && n < 64 && used + (n + 1) * (per + fstep) + al <= CA_ARENA && (!fetch || nfetch + n < CA_FETCHES) && ca_bound(im, i, g_cas.ly, h)) { n++; g_cas.ly++; }
++        if (fetch) nfetch += n;
++        VkDeviceSize foff = (used + n * per + al - 1) / al * al;
++        b->r[b->n] = (ca_rec){im->serial, (uint32_t)im->d.format, (uint32_t)im->d.width, (uint32_t)im->d.height, im->layers, i + im->base, i, w, h, ly0, n, bx * by, f->bw, f->bh,
++                              (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0) | (minor ? 32u : 0), used, foff, fstep, f->srgb, (uint8_t)fetch};
++        tim[b->n++] = im; im->refs++; im->holds++; if (im->last_fence < fence) im->last_fence = fence;
++        used = foff + n * fstep;
 +        if (g_cas.ly >= im->layers) { g_cas.lv++; g_cas.ly = 0; }
 +    }
 +    pthread_mutex_unlock(&g_tmu);
++    int fetched = 0;
++    for (int k = 0; k < b->n; k++) {
++        const ca_rec *r = &b->r[k]; vka_img *im = tim[k]; VkBufferImageCopy rg[64];
++        if (!k) vka_barrier(cb);
++        memset(b->mem.ptr + r->off, 0xA5, 16);   // (still there when the batch is looked at: the copy never ran, the record is not counted)
++        for (uint32_t j = 0; j < r->nly; j++) rg[j] = (VkBufferImageCopy){b->mem.off + r->off + (VkDeviceSize)j * r->nb * 16, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, r->il, r->ly0 + j, 1}, {0, 0, 0}, {r->w, r->h, 1}};
++        vk.vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b->mem.buf, r->nly, rg);
++        for (uint32_t j = 0; j < r->nly && r->fetched; j++) {
++            VkDeviceSize o = r->foff + (VkDeviceSize)j * r->fstep; float mark = -777.0f; memcpy(b->mem.ptr + o, &mark, 4);   // (still there: not sampled)
++            fetched |= vka_fetch_level(cb, im, im->f.view, r->il, r->ly0 + j, r->w, r->h, b->mem.buf, b->mem.off + o);
++        }
++        vka_tex_drop(im);
++    }
++    if (fetched) { vka_dyn_invalidate(); vka_barrier(cb); }
 +    if (g_cas.cur >= g_cas.n) { b->last = 1; g_cas.active = 0; g_cas.next = fr + 600; }
 +    if (!b->n && !b->last) return;
 +    b->pass = g_cas.pass; b->nimg = (uint32_t)g_cas.n; b->unread = g_cas.unread; b->f0 = g_cas.f0; b->frame = fr;
 +    atomic_store(&b->busy, 1);
-+    vka_after(fence, ca_scan_report, b);
++    vka_after(fence, ca_scan_done, b);
 +}
  #endif

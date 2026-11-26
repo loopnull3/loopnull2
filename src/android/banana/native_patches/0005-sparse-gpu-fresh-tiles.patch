@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 49554233..499b713d 100644
+index 3ed8bd21..1d58e07b 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -1294,6 +1294,18 @@ static void copy_bound(vka_img *im, VkCommandBuffer cb, const vka_span *s, uint3
+@@ -1295,6 +1295,18 @@ static void copy_bound(vka_img *im, VkCommandBuffer cb, const vka_span *s, uint3
      }
      if (n) vk.vkCmdCopyBufferToImage(cb, s->buf, im->img, VK_IMAGE_LAYOUT_GENERAL, n, rg);
  }
@@ -21,7 +21,7 @@ index 49554233..499b713d 100644
  // Levels and layers of a sparse texture's image whose pages or mappings changed since (gen, stamp), or all of them, gathered from the page table and deswizzled by bands:
  // a band is one row of GOB blocks (8 << block height block rows), which is one range of the storage. Bands with nothing mapped are zero texels from the zero buffer, bands that
  // did not change (all = 0) are left alone, and runs of mapped bands go through scratch memory of at most 16 MiB a run, gathered from the page table (unmapped pages of a
-@@ -1332,7 +1344,10 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
+@@ -1333,7 +1345,10 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
                  int b2 = 0;
                  if (BAND_CHANGED(k)) for (uint32_t tx = 0; tx < rs_ntx(im, i); tx++) {
                      uint64_t po = off + BAND_OFF(k) + (uint64_t)tx * 0x10000;
@@ -33,7 +33,7 @@ index 49554233..499b713d 100644
                  }
                  bst[k] = b2 ? 2 : 0;
              }
-@@ -1390,7 +1405,16 @@ static void upload_sparse(vka_img *im, VkCommandBuffer cb, int all) {   // gener
+@@ -1391,7 +1406,16 @@ static void upload_sparse(vka_img *im, VkCommandBuffer cb, int all) {   // gener
  static void sparse_bind(vka_img *im, VkCommandBuffer cb, int all) {
      uint64_t gen = im->vgen, stamp = im->stamp;
      im->vgen = nvn_sparse_gen(); im->stamp = nvn_dirty_now();
