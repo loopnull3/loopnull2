@@ -113,6 +113,13 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   candidates under test: `DM_VK_ASTC_CLEAN_COPIES=1` cleans buffer to texture copies and
   WriteTexels as uploads are, and `DM_VK_ASTC_VOID_EXTENT=1` gives a void-extent block whose
   extent is illegal no extent.
+- **Mario Kart World, light-blue pillars and spikes into the sky (open):** on an S26 they stand
+  where there is no water, and go when mesh draws are skipped (`DM_VK_MESH_EMU=0`); the game's
+  mesh programs there are its water (fluid simulation) and its trails. Candidate under test
+  (`native_patches/0005-sparse-gpu-fresh-tiles.patch`, `DM_VK_SPARSE_GPU_ZERO=1` in Diagnostic
+  switches): the game's sparse terrain render targets get memory tile by tile, and a tile that
+  gets memory after the texture's first use started with what that memory last held (Banana
+  Native lists it as open); with the switch it starts as zeros.
 - Shaders built with older shader tools are dropped once, so the game builds them again.
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).
