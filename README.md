@@ -107,10 +107,12 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   the kart. Soft textures do not fix it, and neither did dense images for the sparse ASTC arrays
   (tried and taken out). This driver draws all-zero blocks and HDR blocks (it has no ASTC HDR
   profile) as magenta; uploads from the game's storage take them out, a copy does not. For the
-  next log (`native_patches/0003-astc-copy-audit.patch`, both in Diagnostic switches):
-  `DM_VK_COPY_AUDIT=1` logs every copy into or out of an ASTC texture and counts such blocks in
-  the images they write; `DM_VK_ASTC_CLEAN_COPIES=1` is the candidate under test, buffer to
-  texture copies and WriteTexels cleaned as uploads are.
+  next log (`native_patches/0003-astc-copy-audit.patch`, all in Diagnostic switches):
+  `DM_VK_COPY_AUDIT=1` samples each kind of such block on the phone once, logs every copy into
+  or out of an ASTC texture and counts those blocks in the images the copies write. Two
+  candidates under test: `DM_VK_ASTC_CLEAN_COPIES=1` cleans buffer to texture copies and
+  WriteTexels as uploads are, and `DM_VK_ASTC_VOID_EXTENT=1` gives a void-extent block whose
+  extent is illegal no extent.
 - Shaders built with older shader tools are dropped once, so the game builds them again.
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).
