@@ -152,15 +152,16 @@ index 66e17d3f..ba3b0c31 100644
      vka_barrier(g_cb);
  }
 diff --git a/dm/gfx/vk_android/vka_nanscan.c b/dm/gfx/vk_android/vka_nanscan.c
-index 44d32b05..221ad21f 100644
+index 44d32b05..66ba705e 100644
 --- a/dm/gfx/vk_android/vka_nanscan.c
 +++ b/dm/gfx/vk_android/vka_nanscan.c
-@@ -128,6 +128,70 @@ static void astc_check(VkCommandBuffer cb) {
+@@ -128,6 +128,72 @@ static void astc_check(VkCommandBuffer cb) {
      vka_barrier(cb);
      g_astc_state = 1;
  }
 +// The copy audit's ASTC check (DM_VK_COPY_AUDIT, vka_tex.c; once a run): twelve blocks of a 16x12 ASTC 4x4 texture as the device samples them, logged when fence is
-+// done. The blocks reach the image as they are (a copy after the texture's own, cleaned upload): the kinds an upload takes out, and void-extent blocks with an extent
++// done. The blocks reach the image as they are (a copy after the texture's own, cleaned upload): the kinds an upload takes out, and void-extent blocks with an extent.
++// The scan then finds in it 1 all-zero block, 2 HDR ones (1 void-extent), 1 that is no ASTC data, and LDR void-extent blocks: 4 without an extent, 1 with, 2 illegal
 +int hk_astc_probe_blocks(uint8_t out[2][16], float first[2][4]);   // vka_astc_hdr.cpp
 +static struct { vka_span out; float exp[12][4]; int know[12]; const char *what[12]; } g_pr;   // know: 1 = exp is what a decoder reads, 2 = exp is the block's colour
 +static void probe_report(void *arg) {
@@ -182,7 +183,7 @@ index 44d32b05..221ad21f 100644
 +    static int done; if (done) return;
 +    done = 1;
 +    static uint8_t blk[12][16]; static tex_t t; vka_span raw;
-+    if (!ready() || !vka_static(sizeof blk, 16, &raw) || !vka_static(192 * 16, V.sb_align, &g_pr.out)) { VLOG("copy audit: ASTC check: not run (push descriptors or memory)"); return; }
++    if (!V.push_desc || !ready() || !vka_static(sizeof blk, 16, &raw) || !vka_static(192 * 16, V.sb_align, &g_pr.out)) { VLOG("copy audit: ASTC check: not run (push descriptors or memory)"); return; }
 +    static const uint16_t C[4] = {0x8000, 0x4000, 0xc000, 0xffff}, H[4] = {0x3800, 0x3400, 0x3a00, 0x3c00}, Z[4] = {0, 0, 0, 0};
 +    static const float ec[4] = {0.5f, 0.25f, 0.75f, 1.0f};
 +    memset(blk, 0, sizeof blk);
@@ -205,9 +206,10 @@ index 44d32b05..221ad21f 100644
 +    vka_img *im = vka_tex_get(&t, cb);
 +    if (!im) { VLOG("copy audit: ASTC check: no test texture"); return; }
 +    memcpy(raw.ptr, blk, sizeof blk); memset(g_pr.out.ptr, 0, 192 * 16);
-+    vka_barrier(cb);
++    vka_tex_own(im, cb); vka_barrier(cb);
 +    VkBufferImageCopy rg = {raw.off, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {16, 12, 1}};
 +    vk.vkCmdCopyBufferToImage(cb, raw.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
++    vka_img_written(im);   // (GPU-written: the audit's scan counts its blocks too, which checks the scan against a known texture)
 +    vka_barrier(cb);
 +    VkImageView v = vka_view(im, im->f.view, VK_IMAGE_VIEW_TYPE_2D_ARRAY, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1, NULL);
 +    if (!v) return;
@@ -227,7 +229,7 @@ index 44d32b05..221ad21f 100644
  static int scan_one(VkCommandBuffer cb, batch_t *b, vka_img *im, uint32_t lv, uint32_t l0, uint32_t pass, int bind, int tid, uint64_t stats) {
      if (b->n == MAXR) return 0;
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 9a3dd137..f99650fe 100644
+index 9a3dd137..265fa5f3 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -1139,10 +1139,15 @@ static const uint8_t dims[14][2] = {{4, 4}, {5, 4}, {5, 5}, {6, 5}, {6, 6}, {8,
@@ -266,7 +268,7 @@ index 9a3dd137..f99650fe 100644
                  VkBufferImageCopy c = {
                      .bufferOffset = s.off,
                      .bufferRowLength = 0,
-@@ -3682,4 +3692,209 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -3682,4 +3692,212 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
               done ? how : "nothing readable", done ? "" : ": zeros");
      if (im) vka_tex_drop(im);
  }
@@ -370,6 +372,8 @@ index 9a3dd137..f99650fe 100644
 +    if (g_cap.pass != b->pass) { memset(&g_cap, 0, sizeof g_cap); g_cap.pass = b->pass; }
 +    for (int k = 0; k < b->n; k++) {
 +        const ca_rec *r = &b->r[k];
++        static const uint8_t unrun[16] = {0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5};
++        if (!memcmp(b->mem.ptr + r->off, unrun, 16)) { VRED_ONCE("copy audit: a scan's copy out of serial %llu level %u did not run (a submission that failed?): not counted", (unsigned long long)r->serial, r->level); continue; }
 +        char zs[420] = "", hs[420] = "", bs[420] = ""; size_t zo = 0, ho = 0, bo = 0; uint32_t nzl = 0, nhl = 0, nbl = 0, hve = 0, hem = 0, vp = 0, vx = 0, vi = 0; uint64_t sig = 1469598103934665603ull;
 +        for (uint32_t j = 0; j < r->nly; j++) {
 +            uint32_t c[7] = {0}; hk_astc_count(b->mem.ptr + r->off + (size_t)j * r->nb * 16, r->nb, r->bw, r->bh, c);
@@ -436,6 +440,7 @@ index 9a3dd137..f99650fe 100644
 +        while (g_cas.ly < im->layers && n < 64 && used + (n + 1) * per <= CA_ARENA && ca_bound(im, i, g_cas.ly, h)) {
 +            rg[n] = (VkBufferImageCopy){b->mem.off + used + n * per, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, i, g_cas.ly, 1}, {0, 0, 0}, {w, h, 1}}; n++; g_cas.ly++; }
 +        if (!barrier) { vka_barrier(cb); barrier = 1; }
++        memset(b->mem.ptr + used, 0xA5, 16);   // (still there when the batch is read: the copy never ran, the record is not counted)
 +        vk.vkCmdCopyImageToBuffer(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, b->mem.buf, n, rg);
 +        b->r[b->n++] = (ca_rec){im->serial, (uint32_t)im->d.format, (uint32_t)im->d.width, (uint32_t)im->d.height, im->layers, i + im->base, w, h, ly0, n, bx * by, f->bw, f->bh,
 +                                (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0), used};
