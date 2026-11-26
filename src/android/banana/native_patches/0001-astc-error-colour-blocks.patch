@@ -1,5 +1,5 @@
 diff --git a/android/host/CMakeLists.txt b/android/host/CMakeLists.txt
-index a6b76633..587c46f9 100644
+index 4cd48226..64a75f86 100644
 --- a/android/host/CMakeLists.txt
 +++ b/android/host/CMakeLists.txt
 @@ -8,7 +8,7 @@
@@ -34,10 +34,10 @@ index a6b76633..587c46f9 100644
  
  if(NX_GAMES)
 diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
-index cb1b2187..24397d65 100644
+index fa637b88..cca44c37 100644
 --- a/dm/gfx/vk_android/vka.h
 +++ b/dm/gfx/vk_android/vka.h
-@@ -298,6 +298,7 @@ typedef struct vka_img {
+@@ -311,6 +311,7 @@ typedef struct vka_img {
      uint64_t wb_fence;       // the fence of the submission that holds the last copy of its GPU content back into its storage (vka_tex_writeback; 0: none): vka_wbfollow.h
      int wbf_waiting;         // the prepare's last scan found it waiting for that copy-back; a scan that only runs for waiting images visits just these (wbf_visit)
      int wt;                  // the game writes it through WriteTexels (vka_tex.c mtl_tex_write_region): never tracked again
@@ -247,7 +247,7 @@ index 00000000..607b5f95
 +    return filled;
 +}
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 4f5e1961..3f401129 100644
+index 0090a908..9a3dd137 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -401,6 +401,11 @@ uint64_t nvn_sparse_gen(void); uint64_t nvn_sparse_copy(const void *pool, void *
@@ -262,7 +262,7 @@ index 4f5e1961..3f401129 100644
  static uint64_t g_rows_up;   // bytes of partial row re-uploads (upload_rows_tracked)
  
  // ---------- Sparse textures: images of their mapped levels ----------
-@@ -1020,15 +1025,15 @@ static void upload_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb) {
+@@ -1022,15 +1027,15 @@ static void upload_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb) {
      img_edges_take(im);
      if (vka_nan_on()) im->hash = mem_hash(t->mem, t->L.size);
      uint8_t *c = im->vpool ? NULL : gw_content(t->mem, t->L.size, &im->gw_seen);   // (a sparse pool's storage is read through its page table: upload_)
@@ -282,7 +282,7 @@ index 4f5e1961..3f401129 100644
  }
  // A linear 2D texture of one level and layer whose pages the CPU wrote between byte lo and hi of its storage: only those rows again (Donkey Kong Bananza's glyph cache,
  // 1024x8192 R8: the whole 8 MB was deswizzled and copied each time a glyph was rasterized into it). 0 = not such a texture (the caller uploads all of it)
-@@ -1043,6 +1048,8 @@ static int upload_rows_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+@@ -1045,6 +1050,8 @@ static int upload_rows_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
      img_edges_take(im);
      vka_span s; if (!vka_scratch(pitch * (r1 - r0), 16, &s)) return 1;
      for (uint32_t y = r0; y < r1; y++) memcpy(s.ptr + (size_t)(y - r0) * pitch, t->mem + (size_t)y * st, pitch);
@@ -291,7 +291,7 @@ index 4f5e1961..3f401129 100644
      uint32_t y0 = r0 * f->bh, y1 = r1 * f->bh > im->h ? im->h : r1 * f->bh;
      VkBufferImageCopy c = {s.off, bx * f->bw, (r1 - r0) * f->bh, {im->aspect, 0, 0, 1}, {0, (int32_t)y0, 0}, {im->w, y1 - y0, 1}};
      vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
-@@ -1094,6 +1101,8 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+@@ -1096,6 +1103,8 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
                  vka_span s; if (!vka_scratch(sz, 16, &s)) { free(bst); return 0; }
                  if (nvn_deswizzle_rows(d, tl, ly, t->mem, s.ptr - (size_t)y0 * pitch, pitch, y0, y1)) {
                      VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target); free(bst); return 0; }
@@ -300,7 +300,7 @@ index 4f5e1961..3f401129 100644
                  uint32_t py0 = y0 * f->bh, py1 = y1 * f->bh > h ? h : y1 * f->bh;
                  VkBufferImageCopy cp = {s.off, bx * f->bw, (y1 - y0) * f->bh, {im->aspect, lv, ly, 1}, {0, (int32_t)py0, 0}, {w, py1 - py0, 1}};
                  vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
-@@ -1109,8 +1118,115 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+@@ -1111,8 +1120,115 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
  // A zero texel block: zeros, except ASTC, whose all-zero block is a reserved mode (the error colour): a void-extent block of colour (0, 0, 0, 0) there
  static int is_astc(VkFormat v) { return v >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && v <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK; }
  static const uint8_t k_astc_zero[16] = {0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -418,7 +418,7 @@ index 4f5e1961..3f401129 100644
  }
  // Zero texels without staging: a buffer of zero blocks (first half) and of ASTC's zero blocks (second half), the source of every unmapped part of a sparse texture
  enum { ZHALF = 2 << 20 };
-@@ -1236,7 +1352,7 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
+@@ -1238,7 +1354,7 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
                      if (so + sl > off + len) sl = off + len - so;
                      if (sl > cap) { free(part); cap = sl; if (!(part = malloc(cap))) { VRED("sparse texture serial %llu: copy of %llu bytes not allocated", (unsigned long long)im->serial, (unsigned long long)sl); goto out; } }
                      mapped += sl - nvn_sparse_copy(im->vpool, part, mem + so, sl);
@@ -427,7 +427,7 @@ index 4f5e1961..3f401129 100644
                      // the deswizzler reads level lv of layer ly at its offset in the whole storage, and writes row y at y * pitch: part holds just this run's bytes
                      if (nvn_deswizzle_rows(d, lv, ly, (const uint8_t *)((uintptr_t)part - (uintptr_t)so), s.ptr - (size_t)y0 * pitch, pitch, y0, y1)) {
                          VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)im->serial, d->format, d->target); goto out; }
-@@ -1309,7 +1425,7 @@ static int img_rebase(vka_img *im, uint32_t base, VkCommandBuffer cb) {
+@@ -1311,7 +1427,7 @@ static int img_rebase(vka_img *im, uint32_t base, VkCommandBuffer cb) {
      old->img = im->img; old->m = im->m; old->views = im->views; old->rs = im->rs; old->va = im->va;
      uint32_t ob = im->base, ol = im->levels; uint64_t obytes = im->bytes;
      g_img_bytes -= im->bytes;
@@ -436,7 +436,7 @@ index 4f5e1961..3f401129 100644
      im->rs = n->rs; im->va = n->va; im->rs_tw = n->rs_tw; im->rs_th = n->rs_th; im->bfloor = n->bfloor; im->bneed = n->bneed; im->dcap = n->dcap;   // (old's address space, still counted, goes back
                                                                                                                             // at its img_destroy: a finer start is tried again once enough is free)
      free(n);
-@@ -1430,7 +1546,7 @@ static int img_own(vka_img *im, VkCommandBuffer cb) {   // caller holds g_tmu; 1
+@@ -1432,7 +1548,7 @@ static int img_own(vka_img *im, VkCommandBuffer cb) {   // caller holds g_tmu; 1
      if (ucb) vka_up_end();
      n->inited = 1;
      VkImage oi = im->img; vka_imem om = im->m; void *ov = im->views;
@@ -445,7 +445,7 @@ index 4f5e1961..3f401129 100644
      n->img = oi; n->m = om; n->views = ov; n->bytes = 0;
      if (im->holds) { n->zold = im->zold; im->zold = n; }   // (a holder may read im->img unlocked: the old image stays until it lets go, vka_tex_drop)
      else vka_after(vka_fence_last() + 1, img_destroy, n);   // (after the submission being recorded, which may hold commands that read it)
-@@ -1603,7 +1719,7 @@ static int soft_harden(vka_img *im, VkCommandBuffer cb, const char *why) {
+@@ -1605,7 +1721,7 @@ static int soft_harden(vka_img *im, VkCommandBuffer cb, const char *why) {
          return 0; }
      if (im->gpu_owned) { static _Atomic int k; if (atomic_fetch_add(&k, 1) < 4) VRED("soft texture serial %llu: %s after the GPU wrote it: made whole from its storage, which does not hold those writes (open)", (unsigned long long)im->serial, why); }
      VkImage oi = im->img; vka_imem om = im->m; void *ov = im->views; uint64_t ob = im->bytes; uint32_t ow = im->w, oh = im->h;
@@ -454,7 +454,7 @@ index 4f5e1961..3f401129 100644
      im->cflags = n->cflags; im->nvf = n->nvf; memcpy(im->vf, n->vf, sizeof im->vf); im->fl = n->fl; im->pool_fit = n->pool_fit;   // (the new image's format list, as img_storage_upgrade takes it)
      n->img = oi; n->m = om; n->views = ov; n->bytes = 0; g_img_bytes -= ob;
      if (im->holds) { n->zold = im->zold; im->zold = n; }   // (a holder may read im->img unlocked: the old image stays until it lets go, vka_tex_drop)
-@@ -2166,13 +2282,19 @@ cut:;
+@@ -2168,13 +2284,19 @@ cut:;
      // A piece that could not be deswizzled ends the upload there, as on the serial path: the pieces before it are copied, it and those after it are not
      if (fail) VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target);
      uint64_t bytes = 0;
@@ -474,7 +474,7 @@ index 4f5e1961..3f401129 100644
      free(pc);
      *nbytes = bytes;
      return 1;
-@@ -2183,6 +2305,7 @@ static void upload(vka_img *im, const tex_t *t, VkCommandBuffer cb) {   // (call
+@@ -2185,6 +2307,7 @@ static void upload(vka_img *im, const tex_t *t, VkCommandBuffer cb) {   // (call
      uint64_t t0 = now_ns(), nb = 0; upload_(im, t, cb, &nb);
      atomic_fetch_add_explicit(&g_up_ns, now_ns() - t0, memory_order_relaxed); atomic_fetch_add_explicit(&g_up_bytes, nb, memory_order_relaxed);
  }
@@ -482,7 +482,7 @@ index 4f5e1961..3f401129 100644
  static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *nbytes) {
      if (!im->vpool && upload_mt(im, t, cb, nbytes)) return;   // (a sparse pool's storage is read through its page table below, never at its address)
      const nvn_texdesc *d = &t->d; const vka_fmt *f = &im->f;
-@@ -2193,14 +2316,15 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+@@ -2195,14 +2318,15 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
      // A sparse pool's texture: gathered from its page table by bands, unmapped ones as zero texels (until 2026-11-03 a copy of its whole range was made first)
      if (im->vpool) { if (!im->vbind) upload_sparse_parts(im, cb, 0, 0, 1, 0); return; }   // (a GPU-written one's content is the GPU's: sparse_bind)
      uint8_t *part = NULL; const uint8_t *src = t->mem;
@@ -500,7 +500,7 @@ index 4f5e1961..3f401129 100644
              if (d->format >= 0x79 && d->format <= 0x94 && vka_nan_on()) {   // DM_VK_NANSCAN: all-zero blocks of ASTC textures (an all-zero ASTC block is an error block)
                  uint64_t zb = 0, nb = piece / 16; for (uint64_t k = 0; k < nb; k++) if (!mem_any(s.ptr + 16 * k, 16)) zb++;
                  const char *dm = getenv("DM_VK_NANSCAN_DUMP"); static _Atomic int nd;   // <format>x<w>: level 0 of such textures written to DM_TEMP (diagnostic, at most 64)
-@@ -2210,13 +2334,17 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+@@ -2212,13 +2336,17 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
                  }
                  static _Atomic int nz; if (zb && atomic_fetch_add(&nz, 1) < 64) VLOG("NaN scan: upload of serial %llu format %#x level %u layer %u: %llu of %llu blocks all zero (storage %p)", (unsigned long long)t->serial, d->format, lv, ly, (unsigned long long)zb, (unsigned long long)nb, (const void *)t->mem);
              }
@@ -520,7 +520,7 @@ index 4f5e1961..3f401129 100644
      *nbytes = bytes;
      static _Atomic int n; if (atomic_fetch_add(&n, 1) < 4) VLOG("texture serial %llu %ux%u format %#x: %llu bytes uploaded from guest memory", (unsigned long long)t->serial, im->w, im->h, d->format, (unsigned long long)bytes);
  }
-@@ -2739,7 +2867,7 @@ static int img_storage_upgrade(vka_img *im, VkCommandBuffer cb, VkFormat need) {
+@@ -2742,7 +2870,7 @@ static int img_storage_upgrade(vka_img *im, VkCommandBuffer cb, VkFormat need) {
      vk.vkCmdCopyImage(cb, im->img, VK_IMAGE_LAYOUT_GENERAL, n->img, VK_IMAGE_LAYOUT_GENERAL, nc, c);
      vka_barrier(cb);
      VkImage oi = im->img; vka_imem od = im->m; void *ov = im->views; uint64_t ob = im->bytes;
@@ -529,7 +529,7 @@ index 4f5e1961..3f401129 100644
      n->img = oi; n->m = od; n->views = ov; n->bytes = ob; g_img_bytes -= ob;
      if (im->holds) { n->zold = im->zold; im->zold = n; }
      else vka_after(vka_fence_last() + 1, img_destroy, n);
-@@ -3215,6 +3343,33 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -3235,6 +3363,33 @@ void vka_tex_prepare(VkCommandBuffer cb) {
      }
      g_nreg_writes = 0;
      if (any_rw) vka_barrier(cb);
@@ -563,7 +563,7 @@ index 4f5e1961..3f401129 100644
      // GPU writes whose submission is done: the images over them that did not get their bytes are uploaded again (see gw_t above)
      gml_poll();
      if (vka_nan_on()) watch_scan(cb);
-@@ -3250,6 +3405,8 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -3270,6 +3425,8 @@ void vka_tex_prepare(VkCommandBuffer cb) {
              while (lo < hi) { int m = (lo + hi) / 2; if ((uint64_t)(uintptr_t)by[m]->mem < w->hi) lo = m + 1; else hi = m; }
              for (int j = lo - 1; j >= 0 && (uint64_t)(uintptr_t)by[j]->mem + maxsz > w->lo; j--) {
                  vka_img *im = by[j]; uint64_t a = (uint64_t)(uintptr_t)im->mem;

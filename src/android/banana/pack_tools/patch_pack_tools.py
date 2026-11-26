@@ -6,8 +6,10 @@ Usage: patch_pack_tools.py <generated banana dir (holds assets/pack)> <nan_exact
 nan_exact.py is appended to dm/gfx/tools/vk_android_spv.py. That file is one of the files the Android library version DMSH_VK_CHAIN hashes
 (vk_android_build.py tools_digest), and the release's host loads only libraries of its own version, so the new tools digest gets a
 vk_android_same.tsv row naming the release's version: the phone's builds stay that version. assets/pack/version.txt changes with the
-tools, so a phone unpacks them again. The script fails when the release's tools do not compute the version its header names (another
-layout than this script knows), rather than shipping libraries the host would refuse.
+tools, so a phone unpacks them again. assets/pack/shader_tools.txt gets the new tools digest: what a shader library is made with, which
+stays the same across releases whose shader tools are the same (HokkaidoBridge.dropOldShaders). The script fails when the release's
+tools do not compute the version its header names (another layout than this script knows), rather than shipping libraries the host
+would refuse.
 """
 import ast, hashlib, importlib.util, os, re, shutil, sys, tempfile, zipfile
 
@@ -77,6 +79,7 @@ def main():
         old = open(vpath).read().strip()
         new = hashlib.sha256(f'{old}\0{after}'.encode()).hexdigest()[:16]
         open(vpath, 'w').write(new + '\n')
+        open(os.path.join(pack, 'shader_tools.txt'), 'w').write(after + '\n')
         print(f'patch_pack_tools: library version {want} (tools {before} -> {after}), pack {old} -> {new}')
     finally:
         shutil.rmtree(work, ignore_errors=True)

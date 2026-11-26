@@ -51,9 +51,14 @@ every game on an 8 GB phone.
 LoopNative 0.1 reads a game's files as they are. The engine that rebuilds them is
 [Banana Native](https://git.eden-emu.dev/moceure/BananaNative) (MIT): Prepare rewrites the game's
 code and translates its shaders into a pack, then the code runs natively and NVN draws through
-Vulkan. Writing that from nothing is years of work, so LoopNative Pack takes Banana Native v0.3.45
-as Hokkaido embeds it (`src/android/banana`: its Android sources in `upstream/`, Hokkaido's
-patches, its native libraries from the pinned release) and changes it for these phones.
+Vulkan. Writing that from nothing is years of work, so LoopNative Pack takes Banana Native as
+Hokkaido embeds it (`src/android/banana`: its Android sources in `upstream/`, Hokkaido's patches,
+its native libraries from the pinned release) and changes it for these phones. The release is
+v0.3.51 (Hokkaido 0.7.1 had v0.3.45; `tools/android/sync_bananative.sh` moves it): among its
+changes are games no longer waiting for shaders they can play without, the RAM saver's level
+reaching the texture cache, the depth bounds test and indirect quad draws. Shaders built with
+v0.3.45 stay: both releases have the same shader tools. A game's code is rewritten once at its
+next start.
 
 | Change | Where | Why |
 |---|---|---|
@@ -70,7 +75,7 @@ patches, its native libraries from the pinned release) and changes it for these 
 The last four come from [loopnull3/Hokkaido](https://github.com/loopnull3/Hokkaido), branch
 `ccr-2855a939-9ewczd` (up to `acc997c`), where they were made against a Galaxy S26. Its three
 shader passes that read exact pink as 0 are left out, as that branch's last commit does: they
-turned valid data black. CI builds the game hosts from Banana Native v0.3.45's source with the
+turned valid data black. CI builds the game hosts from Banana Native v0.3.51's source with the
 patches (`tools/android/build_bananative_hosts.sh`); the packer's libraries stay the release's.
 
 Further native changes (a profile's `low_ram_*` keys for an 8 GB class, an Adreno 740 path) go the

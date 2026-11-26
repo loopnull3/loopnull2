@@ -1,6 +1,6 @@
 --- a/main/java/dev/nxnative/android/GameActivity.java
 +++ b/main/java/dev/nxnative/android/GameActivity.java
-@@ -126,7 +126,7 @@
+@@ -134,7 +134,7 @@
          tag = overlayText(Gravity.TOP | Gravity.START, 1f);
          tag.setText(Prefs.buildTag(this));
          tag.setTypeface(Typeface.DEFAULT_BOLD);
@@ -9,7 +9,7 @@
          root.addView(tag, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
          // The log block may grow at most up to the tag's bottom edge (its top margin), so a long log never runs under the tag
          tag.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-@@ -134,13 +134,14 @@
+@@ -142,13 +142,14 @@
              int top = b + ((FrameLayout.LayoutParams) tag.getLayoutParams()).topMargin;
              if (lp.topMargin != top) { lp.topMargin = top; overlay.post(overlay::requestLayout); }
          });
@@ -28,16 +28,16 @@
          stats = new Overlay(this);
          panel = new SidePanel(this, new SidePanel.Rows() {
              @Override public void controls(LinearLayout box) { controls.controlRows(GameActivity.this, box); }
-@@ -170,7 +171,7 @@
+@@ -178,7 +179,7 @@
          });
          handle.setContentDescription(Tx.s(R.string.game_open_the_in_game_panel));
          handle.setOnClickListener(v -> panel.open());   // TalkBack's double tap
 -        root.addView(handle, root.indexOfChild(panel), new FrameLayout.LayoutParams(Math.round(20 * dp), Math.round(140 * dp), Gravity.END | Gravity.TOP));
 +        if (!HokkaidoInGame.on()) root.addView(handle, root.indexOfChild(panel), new FrameLayout.LayoutParams(Math.round(20 * dp), Math.round(140 * dp), Gravity.END | Gravity.TOP));   // Hokkaido's menu opens with Back
-         // Auto with a gamepad connected, or Off: the handle goes with the controls (Back or a gamepad's Home button opens the panel)
+         // Auto with a gamepad connected, or Off: the handle goes with the controls (Back or a gamepad's Home button opens the menu, and the panel from it)
          controls.onSwitch = v -> updateHandle(v);
          controls.setMode(TouchControls.mode(this, id));
-@@ -185,8 +186,9 @@
+@@ -193,8 +194,9 @@
          pausedView.setBackgroundColor(0x99000000);
          pausedView.setVisibility(View.GONE);
          pausedView.setOnClickListener(v -> unpause());
@@ -48,15 +48,15 @@
          root.setOnApplyWindowInsetsListener((v, in) -> { insetOverlay(in); return in; });   // again whenever the insets change (a turn, a fold)
          setContentView(root);
          clean(Prefs.clean(this));   // the saved clean picture applies to the controls and the panel strip too, not only to the overlay/log settings
-@@ -223,6 +225,7 @@
+@@ -231,6 +233,7 @@
          t.setBackground(bg);
          t.setClickable(false);
          t.setFocusable(false);
 +        HokkaidoInGame.styleOverlay(t);
          return t;
      }
-
-@@ -237,10 +240,15 @@
+ 
+@@ -245,10 +248,15 @@
          android.view.DisplayCutout cut = in.getDisplayCutout();
          int cl = cut == null ? 0 : cut.getSafeInsetLeft(), ct = cut == null ? 0 : cut.getSafeInsetTop(), cr = cut == null ? 0 : cut.getSafeInsetRight();
          int[] a = OverlayInset.topLeft(tl == null ? 0 : tl.getRadius(), cl, ct), b = OverlayInset.topRight(tr == null ? 0 : tr.getRadius(), cr, ct);
@@ -76,7 +76,7 @@
          int[] c = OverlayInset.topLeft(bl == null ? 0 : bl.getRadius(), cl, 0);   // the log block, bottom left: sideways by the corner, up by the same as a top one down
          FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) overlay.getLayoutParams();
          if (lp.leftMargin != c[0] || lp.bottomMargin != c[1]) { lp.leftMargin = c[0]; lp.bottomMargin = c[1]; overlay.requestLayout(); }
-@@ -384,7 +392,7 @@
+@@ -401,7 +409,7 @@
      private void fpsTick() {
          if (stopped || paused) { ui.postDelayed(this::fpsTick, 2000); return; }   // nothing to show: no readings (thermal, battery, the host's counters) while suspended
          boolean on = overlayOn();
@@ -85,37 +85,27 @@
          boolean host = tagBlock.host(g) & fpsBlock.host(t);   // both every time: a block that is off empties its corner
          fps.setVisibility(!host && t != null ? View.VISIBLE : View.GONE);
          tag.setVisibility(!host && g != null ? View.VISIBLE : View.GONE);
-@@ -1290,7 +1298,7 @@
-         pausedView.setVisibility(View.VISIBLE);
-     }
-
--    private void unpause() {
-+    void unpause() {
-         if (!paused) return;
-         paused = false;
-         pausedView.setVisibility(View.GONE);
-@@ -1519,4 +1527,8 @@
+@@ -1589,4 +1597,7 @@
      FrameLayout rootView() { return rootView; }
      View panelView() { return panel; }
      boolean gamepadConnected() { return !pads.isEmpty(); }
 +
 +    // For Hokkaido's in-game menu (HokkaidoInGame.Screen)
-+    boolean paused() { return paused; }
 +    TouchControls touchControls() { return controls; }
  }
 --- a/main/java/dev/nxnative/android/SidePanel.java
 +++ b/main/java/dev/nxnative/android/SidePanel.java
-@@ -56,6 +56,8 @@
+@@ -80,6 +80,8 @@
      private View lit;   // the view with the focus frame
-     /** GameActivity: the game's held buttons released when the panel opens (releaseGameInput) */
+     /** GameActivity: the game's held buttons released when the drawer opens (releaseGameInput) */
      Runnable onOpen;
 +    /** Hokkaido's in-game menu (HokkaidoInGame), which shows the tabs' rows in its own look; null: this panel shows them */
 +    private final HokkaidoInGame.Menu hk;
-
+ 
      /** The rows GameActivity adds from its on-screen controls (TouchControls) */
      interface Rows {
-@@ -106,6 +108,12 @@
-         sheet = sh;
+@@ -142,6 +144,12 @@
+         addView(menuSink, new LayoutParams(1, 1));
          getViewTreeObserver().addOnGlobalFocusChangeListener(this::focusMoved);
          setVisibility(GONE);
 +        hk = a instanceof GameActivity ? HokkaidoInGame.menu((GameActivity) a, this) : null;
@@ -125,94 +115,101 @@
 +            setVisibility(VISIBLE);
 +        }
      }
-
+ 
      /** The controller's confirm and back keys (PadPanel.confirmBack: the buttons that are the Switch's A and B in this game) */
-@@ -114,12 +122,13 @@
-     boolean isOpen() { return open; }
-     void toggle() { if (open) close(); else open(); }
-     /** Opened or closed by a controller (GameActivity: Home, or − and + held): opened, the focus on its first row, out of touch mode */
--    void padToggle() { if (open) close(); else { open(); post(this::ensureFocus); } }
-+    void padToggle() { if (open) close(); else { open(); if (hk != null) hk.focus(); else post(this::ensureFocus); } }
-
-     void open() {
-         if (open) return;
-         open = true;
-         if (onOpen != null) onOpen.run();
-+        if (hk != null) { hk.open(); return; }   // its quick settings ask for a tab (hokkaidoTab)
-         box.removeAllViews();
-         build();
-         look();
-@@ -136,6 +145,7 @@
-         open = false;
+@@ -150,12 +158,12 @@
+     /** The drawer shows: the game gets no pad input (GameActivity) */
+     boolean isOpen() { return open || menuOpen; }
+     /** Back (GameActivity.onBackPressed): one level up. A section goes back to the menu, the menu back to the game; with nothing showing the menu opens */
+-    void back() { if (open) showMenu(); else if (menuOpen) close(); else openMenu(); }
++    void back() { if (hk != null) { if (isOpen()) close(); else openMenu(); } else if (open) showMenu(); else if (menuOpen) close(); else openMenu(); }
+     /** Opened or closed by a controller (GameActivity: Home, or − and + held): the menu, its first row selected, out of touch mode */
+-    void padToggle() { if (isOpen()) close(); else { openMenu(); menuSelect(0); } }
++    void padToggle() { if (isOpen()) close(); else { openMenu(); if (hk != null) hk.focus(); else menuSelect(0); } }
+ 
+     /** The drawer on the section that showed last (the on-screen controls' long press, the right edge's swipe) */
+-    void open() { showPage(tab); }
++    void open() { if (hk != null) openMenu(); else showPage(tab); }
+ 
+     /** The drawer slides out: back to the game */
+     void close() {
+@@ -165,6 +173,7 @@
          heldDir = stickHeld = PadPanel.NONE;
          removeCallbacks(repeat);
+         removeCallbacks(tick);
 +        if (hk != null) { hk.close(); return; }
-         sheet.animate().translationX(sheet.getLayoutParams().width).setDuration(150).withEndAction(() -> { if (!open) setVisibility(GONE); }).start();
-     }
-
-@@ -144,6 +154,7 @@
-      * repeated; left / right step a radio group or a slider), L / R switch tabs. Each acts on its press. Every key but Back is the panel's: false lets Back through
+         drawer.animate().cancel();
+         drawer.animate().translationX(-drawer.getWidth()).setDuration(150)
+                 .withEndAction(() -> { if (!menuOpen) { sheet.setVisibility(GONE); drawer.setVisibility(GONE); setVisibility(GONE); } }).start();
+@@ -172,6 +181,15 @@
+ 
+     /** The menu (Back, a controller's Home): the drawer slides in with no section, or a section that showed goes back to it */
+     void openMenu() {
++        if (hk != null) {   // Hokkaido's menu: its quick settings ask for a section's rows (hokkaidoTab)
++            if (menuOpen) return;
++            menuOpen = true;
++            if (onOpen != null) onOpen.run();
++            heldDir = stickHeld = PadPanel.NONE;
++            removeCallbacks(repeat);
++            hk.open();
++            return;
++        }
+         if (open) { showMenu(); return; }
+         if (menuOpen) return;
+         slideIn();
+@@ -404,6 +422,7 @@
+      * Every key but Back is the drawer's: false lets Back through
       */
      boolean padKey(KeyEvent e) {
 +        if (hk != null) return hk.padKey(e, confirm, back);
          int k = e.getKeyCode();
-         if (k == KeyEvent.KEYCODE_BACK) return false;   // the activity's Back closes the panel
+         if (k == KeyEvent.KEYCODE_BACK) return false;   // the activity's Back (back())
          boolean press = e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0, up = e.getAction() == KeyEvent.ACTION_UP;
-@@ -159,6 +170,7 @@
-
+@@ -433,6 +452,7 @@
+ 
      /** A controller's sticks and hat while the panel is open: the hat or the left stick as a direction (PadPanel.stick), held like a D-pad key. The game gets none */
      boolean padMotion(MotionEvent e) {
 +        if (hk != null) return hk.padMotion(e);
          if (e.getAction() != MotionEvent.ACTION_MOVE) return true;
          int d = PadPanel.stick(e.getAxisValue(MotionEvent.AXIS_HAT_X), e.getAxisValue(MotionEvent.AXIS_HAT_Y), stickHeld);
          if (d == PadPanel.NONE) d = PadPanel.stick(e.getAxisValue(MotionEvent.AXIS_X), e.getAxisValue(MotionEvent.AXIS_Y), stickHeld);
-@@ -356,8 +368,19 @@
-         refresh();
+@@ -587,8 +607,21 @@
+         showPage(k);
      }
-
-+    /** Hokkaido's quick settings show a tab: its rows built for it (look), while the menu is open */
+ 
++    /** Hokkaido's quick settings show a section: its rows built for it (look), while the menu is open */
 +    void hokkaidoTab(int k) {
-+        if (!open) return;
++        if (!menuOpen) return;
 +        tab = k;
++        open = true;   // (refresh: the section's live rows)
 +        box.removeAllViews();
 +        build();
 +        look();
++        removeCallbacks(tick);
 +        refresh();
 +    }
 +
-     /** The panel's size and text size (Prefs.panelSize / panelText): its width, and every row's least height and text size, over what build() made */
+     /** The panel's size and text size (Prefs.panelSize / panelText): the section's width, and every row's least height and text size, over what build() made */
      private void look() {
 +        if (hk != null) { hk.built(tab, box); return; }
          float dp = getResources().getDisplayMetrics().density;
-         int size = Prefs.panelSize(act), w = PanelLook.widthPx(size, dp, getResources().getDisplayMetrics().widthPixels);
-         if (sheet.getLayoutParams().width != w) { sheet.getLayoutParams().width = w; sheet.requestLayout(); }
-@@ -623,7 +646,7 @@
-     /** General: the panel's own look, Pause, Stop and Back to the game */
+         sizes();
+         look(box, PanelLook.textScale(Prefs.panelText(act)), PanelLook.rowPx(Prefs.panelSize(act), dp));
+@@ -652,7 +685,7 @@
+ 
+     /** The section's rows (TAB_NAMES); Performance's here: the frame rate cap, the Upscaler (with a render_cfg game's Upscaling quality and Graphics quality), the dynamic resolution and frame generation */
+     private void build() {
+-        if (stacked()) {   // the menu does not show beside it: the section's name at its top says where Back goes from
++        if (hk == null && stacked()) {   // the menu does not show beside it: the section's name at its top says where Back goes from
+             TextView t = head(Tx.arr(R.array.arr_panel_tabs)[tab]);
+             t.setTextSize(20);
+             t.setPadding(0, 0, 0, 0);
+@@ -866,7 +899,7 @@
+     /** General: the panel's own look, cheats, shaders, Hide everything and Pause when the game comes back */
      private void general() {
          note(Tx.s(R.string.game_the_game_runs_on_behind));
 -        panelRows();
 +        if (hk == null) panelRows();   // Hokkaido's menu has a look of its own
          cheatRows();
          shaderRows();
-
-@@ -638,17 +661,20 @@
-         });
-         box.addView(clean);
-
-+        if (hk == null) {   // Hokkaido's menu has Pause and Exit
-         Button pause = new Button(act);   // the game suspended (clock, graphics, threads, audio) until a tap on the screen, or A / Start: GameActivity.pause
-         pause.setText(Tx.s(R.string.game_pause_the_game));
-         pause.setOnClickListener(v -> { close(); if (act instanceof GameActivity) ((GameActivity) act).pause(); });
-         LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-         pl.topMargin = Math.round(24 * getResources().getDisplayMetrics().density);
-         box.addView(pause, pl);
-+        }
-         android.widget.CheckBox ret = new android.widget.CheckBox(act);
-         ret.setText(Tx.s(R.string.game_pause_when_the_game_comes));
-         ret.setChecked(Prefs.pauseOnReturn(act, game()));
-         ret.setOnCheckedChangeListener((b, on) -> Prefs.pauseOnReturn(act, game(), on));
-         box.addView(ret);
-+        if (hk != null) return;
-         Button stop = new Button(act);
-         stop.setText(Tx.s(R.string.game_stop_the_game));
-         stop.setOnClickListener(v -> padDialog(new AlertDialog.Builder(act).setTitle(Tx.s(R.string.game_stop_the_game_2)).setMessage(Tx.s(R.string.game_the_game_ends_unsaved_progress))
+ 

@@ -1,5 +1,5 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 3f401129..4080f212 100644
+index 9a3dd137..80a86a23 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -456,8 +456,13 @@ static uint32_t sparse_base(const void *pool, const uint8_t *mem, const nvn_texd

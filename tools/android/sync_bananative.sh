@@ -41,8 +41,8 @@ unzip -q -o "$apk" 'classes*.dex' -d "$work"
 {
     echo "# BuildConfig fields of the Banana Native release this module embeds, read from its classes.dex (tools/android/sync_bananative.sh): name, Java type and Java literal, separated by the first two spaces"
     for dex in "$work"/classes*.dex; do "$dexdump" "$dex" 2>/dev/null; done | awk '
-        /Class descriptor  : .Ldev\/nxnative\/android\/BuildConfig;/ { p = 1 }
-        p && /Instance fields/ { exit }
+        /Class descriptor  : .Ldev\/nxnative\/android\/BuildConfig;/ && !done { p = 1 }
+        p && /Instance fields/ { p = 0; done = 1 }   # (not exit: dexdump would end on a closed pipe, which pipefail takes for a failure)
         p && /^ *name *: / { n = $0; sub(/^ *name *: \x27/, "", n); sub(/\x27$/, "", n) }
         p && /^ *type *: / { t = $0; sub(/^ *type *: \x27/, "", t); sub(/\x27$/, "", t) }
         p && /^ *value *: / {

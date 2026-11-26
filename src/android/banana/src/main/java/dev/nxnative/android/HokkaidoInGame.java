@@ -156,9 +156,9 @@ public final class HokkaidoInGame {
         }
 
         /**
-         * Ends the game, as the panel's Stop the game does, and goes back to Hokkaido's screen under it: the game
-         * screen shares Hokkaido's task, so it finishes (backToFrontend would send that whole task to the background).
-         * The process ends once the screen has gone.
+         * Ends the game, as the menu's Stop does, and goes back to Hokkaido's screen: the game screen is the one
+         * screen of a task of its own (the manifest's taskAffinity, as Banana Native since v0.3.50), so finishing it
+         * ends that task and Hokkaido's comes forward. The process ends once the screen has gone.
          */
         public void stop() {
             Native.note("stopped by the user");

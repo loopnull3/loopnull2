@@ -1,29 +1,29 @@
 diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
-index 24397d65..814df086 100644
+index cca44c37..de7b3026 100644
 --- a/dm/gfx/vk_android/vka.h
 +++ b/dm/gfx/vk_android/vka.h
 @@ -46,7 +46,7 @@
      X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdDrawIndirect) X(vkCmdDrawIndexedIndirect) X(vkCmdDispatch) X(vkCmdDispatchIndirect) X(vkCmdDispatchBase) \
      X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetCullMode) X(vkCmdSetFrontFace) X(vkCmdSetPrimitiveTopology) \
-     X(vkCmdSetDepthTestEnable) X(vkCmdSetDepthWriteEnable) X(vkCmdSetDepthCompareOp) X(vkCmdSetDepthBoundsTestEnable) X(vkCmdSetStencilTestEnable) X(vkCmdSetStencilOp) \
+     X(vkCmdSetDepthTestEnable) X(vkCmdSetDepthWriteEnable) X(vkCmdSetDepthCompareOp) X(vkCmdSetDepthBoundsTestEnable) X(vkCmdSetDepthBounds) X(vkCmdSetStencilTestEnable) X(vkCmdSetStencilOp) \
 -    X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) X(vkCmdSetStencilReference) X(vkCmdSetDepthBias) X(vkCmdSetDepthBiasEnable) \
 +    X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) X(vkCmdSetStencilReference) X(vkCmdSetDepthBias) X(vkCmdSetDepthBiasEnable) X(vkCmdSetDepthBias2EXT) \
      X(vkCmdSetRasterizerDiscardEnable) X(vkCmdSetPrimitiveRestartEnable) X(vkCmdSetBlendConstants) X(vkCmdSetLineWidth) \
      X(vkCmdPushDescriptorSetKHR) X(vkCmdSetVertexInputEXT) X(vkCmdPushConstants) X(vkCmdDrawMeshTasksEXT) X(vkCmdDrawMeshTasksIndirectEXT) \
-     X(vkCmdDrawIndirectCount) X(vkCmdDrawIndexedIndirectCount)
-@@ -106,6 +106,7 @@ typedef struct {
+     X(vkCmdDrawIndirectCount) X(vkCmdDrawIndexedIndirectCount) X(vkCmdBeginQuery) X(vkCmdEndQuery)
+@@ -111,6 +111,7 @@ typedef struct {
      int minmax;      // samplerFilterMinmax (Vulkan 1.2): NVN's min / max sampler reduction (vka_tex.c sampler_of)
      int draw_count;                                 // drawIndirectCount (Vulkan 1.2): an indirect-count multi-draw's count read by the GPU (vka_draw.c vka_mdi_gpu)
      int push_desc, vin_dyn, null_desc, idx8, divisor, logic_op, dual_src, geom, tess, depth_clamp, fill_lines, depth_bias_clamp, multi_vp, a2c;
 +    int dbias_float, dbias_exact;   // VK_EXT_depth_bias_control: floatRepresentation, depthBiasExact (vka_draw.c: NVN D24 depth made D32F keeps D24's constant bias)
+     int depth_bounds;   // depthBounds: NVN's depth bounds test (nvnCommandBufferSetDepthBounds, vka_draw.c); without it the bounds are ignored, as before
      int vstores, fstores;   // vertexPipelineStoresAndAtomics, fragmentStoresAndAtomics: texture-use feedback of the pool (vka_tex.c "Texture pool reads") writes from those stages
      // NVN2 task and mesh programs (VK_EXT_mesh_shader: mesh = meshShader, task = taskShader too; DM_VK_MESH=0 leaves it off): their shaders are refused without it (vka_shader.c refusal)
-     // and their draws skipped. mesh_inv / task_inv: the largest workgroup (maxMeshWorkGroupInvocations / maxTaskWorkGroupInvocations); mesh_out_v / mesh_out_p: the most vertices /
 diff --git a/dm/gfx/vk_android/vka_dev.c b/dm/gfx/vk_android/vka_dev.c
-index 27b670c4..82e80b2c 100644
+index 4b075ae4..d568a992 100644
 --- a/dm/gfx/vk_android/vka_dev.c
 +++ b/dm/gfx/vk_android/vka_dev.c
-@@ -216,6 +216,9 @@ static int init_once(void) {
+@@ -217,6 +217,9 @@ static int init_once(void) {
      const char *x_cal = has_ext(de, nde, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ? VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME
                        : has_ext(de, nde, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ? VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : NULL;
      if (x_cal) { dext[ndext++] = x_cal; V.cal_ts = 1; }
@@ -33,7 +33,7 @@ index 27b670c4..82e80b2c 100644
      free(de);
  
      // Every feature the device has, but robustness and capture-replay (they cost and nothing needs them); the shader side takes what it needs from the same device
-@@ -227,10 +230,11 @@ static int init_once(void) {
+@@ -228,10 +231,11 @@ static int init_once(void) {
      VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT fgpl = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
      VkPhysicalDeviceMeshShaderFeaturesEXT fmesh = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
      VkPhysicalDeviceFaultFeaturesEXT ffault = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
@@ -46,19 +46,19 @@ index 27b670c4..82e80b2c 100644
  #undef LINK
      VkPhysicalDeviceVulkan13Features f13 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, .pNext = chain};
      VkPhysicalDeviceVulkan12Features f12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &f13};
-@@ -247,6 +251,7 @@ static int init_once(void) {
+@@ -248,6 +252,7 @@ static int init_once(void) {
      V.push_desc = x_push; V.vin_dyn = x_vin && fvin.vertexInputDynamicState; V.null_desc = x_rob && frob.nullDescriptor; V.idx8 = x_i8 && fi8.indexTypeUint8;
      V.divisor = x_div && fdiv.vertexAttributeInstanceRateDivisor; V.logic_op = f2.features.logicOp; V.dual_src = f2.features.dualSrcBlend; V.geom = f2.features.geometryShader;
      V.tess = f2.features.tessellationShader; V.depth_clamp = f2.features.depthClamp; V.fill_lines = f2.features.fillModeNonSolid; V.depth_bias_clamp = f2.features.depthBiasClamp;
 +    V.dbias_float = x_dbc && fdbc.depthBiasControl && fdbc.floatRepresentation; V.dbias_exact = V.dbias_float && fdbc.depthBiasExact;
+     V.depth_bounds = f2.features.depthBounds && VKA_ENV("DM_VK_DEPTH_BOUNDS", 1);   // (enabled with the rest of f2; DM_VK_DEPTH_BOUNDS=0: the bounds ignored, as before)
      V.multi_vp = f2.features.multiViewport; V.a2c = 1; V.vstores = f2.features.vertexPipelineStoresAndAtomics; V.fstores = f2.features.fragmentStoresAndAtomics; V.mesh = x_mesh && fmesh.meshShader; V.task = V.mesh && fmesh.taskShader;
      if (!f12.timelineSemaphore || !f13.dynamicRendering) { VRED("the device lacks timeline semaphores (%d) or dynamic rendering (%d)", f12.timelineSemaphore, f13.dynamicRendering); return 0; }
-     V.imageless = f12.imagelessFramebuffer;   // (enabled with the rest of f12)
 diff --git a/dm/gfx/vk_android/vka_draw.c b/dm/gfx/vk_android/vka_draw.c
-index 38935ba5..081555cb 100644
+index a615fc96..01abccce 100644
 --- a/dm/gfx/vk_android/vka_draw.c
 +++ b/dm/gfx/vk_android/vka_draw.c
-@@ -197,7 +197,7 @@ static VkDescriptorSet set_alloc(VkDescriptorSetLayout l) {
+@@ -204,7 +204,7 @@ static VkDescriptorSet set_alloc(VkDescriptorSetLayout l) {
  // ---------- The render pass ----------
  static struct {
      int on, classic; VkRect2D area; uint32_t full_w, full_h, layers, samples; int area_cut;   // classic: begun as a VkRenderPass (DM_VK_CLASSIC_RP); area_cut: area narrowed by DM_VK_RP_AREA
@@ -67,7 +67,7 @@ index 38935ba5..081555cb 100644
      vka_img *cim[8]; uint32_t clv[8], cl0[8]; int nci;   // the colour attachments (DM_VK_NANSCAN)
      p_set_rt rt; int has_rt;                             // the targets it was opened for: a later SET_RT of the same targets keeps it open
      uint32_t cnl[8], dnl; VkExtent2D cext[8], dext;      // each attachment's layers and level size (clears in the pass must cover what they would outside it)
-@@ -584,7 +584,7 @@ static int rp_begin(const p_set_rt *rt, int has_rt, const p_scissor *sc, int has
+@@ -627,7 +627,7 @@ static int rp_begin(const p_set_rt *rt, int has_rt, const p_scissor *sc, int has
              VkImageView v = lv < im->levels && nl ? vka_view(im, im->f.vk, nl > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D, im->aspect, lv, 1, l0, nl, NULL) : VK_NULL_HANDLE;
              if (v) {
                  da = (VkRenderingAttachmentInfo){VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = v, .imageLayout = VK_IMAGE_LAYOUT_GENERAL, .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
@@ -76,16 +76,16 @@ index 38935ba5..081555cb 100644
                  if (im->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) { sp = &da; R.sf = im->f.vk; }
                  samples = im->samples; fb_im[nfb] = im; fb_lv[nfb++] = lv; s_im[8] = im; s_lv[8] = lv; s_nl[8] = nl;
                  uint32_t lw = im->w >> lv ? im->w >> lv : 1, lh = im->h >> lv ? im->h >> lv : 1;
-@@ -1800,7 +1800,7 @@ static uint32_t *read_indices(uint64_t addr, int itype, uint32_t count) {
+@@ -1845,7 +1845,7 @@ static uint32_t *read_indices(uint64_t addr, int itype, uint32_t count) {
  // The dynamic state the command buffer holds: each draw sets only what changed (the draw path set some 25 states a draw). Valid from the first draw of a submission until
  // something else binds a graphics pipeline with static state (the masked stencil clear: vka_dyn_invalidate) or the submission ends; every graphics pipeline of the draws has
  // the same dynamic states (vka_pso.c), so binding one keeps them, except a mesh pipeline, which has no topology or primitive restart (vka_draw resets DY.topo / DY.pr after one)
--static struct { int valid; VkPipeline pipe; VkViewport vp; VkRect2D sc; uint32_t cull, ff, topo, dt, dw, dc, dbt, stt, dbe, rd, pr, sop[8], smask[6]; float db[3], bc[4]; } DY;
-+static struct { int valid; VkPipeline pipe; VkViewport vp; VkRect2D sc; uint32_t cull, ff, topo, dt, dw, dc, dbt, stt, dbe, rd, pr, sop[8], smask[6]; float db[4], bc[4]; } DY;
+-static struct { int valid; VkPipeline pipe; VkViewport vp; VkRect2D sc; uint32_t cull, ff, topo, dt, dw, dc, dbt, stt, dbe, rd, pr, sop[8], smask[6]; float db[3], bc[4], dbb[2]; } DY;
++static struct { int valid; VkPipeline pipe; VkViewport vp; VkRect2D sc; uint32_t cull, ff, topo, dt, dw, dc, dbt, stt, dbe, rd, pr, sop[8], smask[6]; float db[4], bc[4], dbb[2]; } DY;
  #define DY_SET(f, val, call) do { if (!DY.valid || !g_dyn_filter || memcmp(&DY.f, &(val), sizeof DY.f)) { memcpy(&DY.f, &(val), sizeof DY.f); call; } } while (0)
  #define DY_SET1(f, val, call) do { uint32_t v_ = (val); if (!DY.valid || !g_dyn_filter || DY.f != v_) { DY.f = v_; call; } } while (0)
  // The index buffer the command buffer holds: bound again only when it changes (DM_VK_VB_FILTER), forgotten with the dynamic state
-@@ -2617,7 +2617,16 @@ static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_sci
+@@ -2769,7 +2769,16 @@ static void draw_body(vka_dstate *d, const p_set_rt *rt, int has_rt, const p_sci
      int bias_bit = d->poly.mode == NVN_POLYGON_MODE_POINT ? NVN_POLYGON_OFFSET_ENABLE_POINT : d->poly.mode == NVN_POLYGON_MODE_LINE ? NVN_POLYGON_OFFSET_ENABLE_LINE : NVN_POLYGON_OFFSET_ENABLE_FILL;
      int bias = (d->poly.offset_en & bias_bit) != 0;
      DY_SET1(dbe, (uint32_t)(bias), vk.vkCmdSetDepthBiasEnable(g_cb, DY.dbe));
@@ -104,19 +104,19 @@ index 38935ba5..081555cb 100644
      DY_SET(bc, d->blend_color, vk.vkCmdSetBlendConstants(g_cb, d->blend_color));
      if (!DY.valid) vk.vkCmdSetLineWidth(g_cb, 1.0f);
 diff --git a/dm/gfx/vk_android/vka_enc.c b/dm/gfx/vk_android/vka_enc.c
-index 0bd03021..c77d33b7 100644
+index c5f85a55..180f31f3 100644
 --- a/dm/gfx/vk_android/vka_enc.c
 +++ b/dm/gfx/vk_android/vka_enc.c
-@@ -28,7 +28,7 @@
+@@ -29,7 +29,7 @@
      X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdDrawIndirect) X(vkCmdDrawIndexedIndirect) X(vkCmdDispatch) X(vkCmdDispatchIndirect) X(vkCmdDispatchBase) \
      X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetCullMode) X(vkCmdSetFrontFace) X(vkCmdSetPrimitiveTopology) \
-     X(vkCmdSetDepthTestEnable) X(vkCmdSetDepthWriteEnable) X(vkCmdSetDepthCompareOp) X(vkCmdSetDepthBoundsTestEnable) X(vkCmdSetStencilTestEnable) X(vkCmdSetStencilOp) \
+     X(vkCmdSetDepthTestEnable) X(vkCmdSetDepthWriteEnable) X(vkCmdSetDepthCompareOp) X(vkCmdSetDepthBoundsTestEnable) X(vkCmdSetDepthBounds) X(vkCmdSetStencilTestEnable) X(vkCmdSetStencilOp) \
 -    X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) X(vkCmdSetStencilReference) X(vkCmdSetDepthBias) X(vkCmdSetDepthBiasEnable) \
 +    X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) X(vkCmdSetStencilReference) X(vkCmdSetDepthBias) X(vkCmdSetDepthBiasEnable) X(vkCmdSetDepthBias2EXT) \
      X(vkCmdSetRasterizerDiscardEnable) X(vkCmdSetPrimitiveRestartEnable) X(vkCmdSetBlendConstants) X(vkCmdSetLineWidth) \
      X(vkCmdPushDescriptorSetKHR) X(vkCmdSetVertexInputEXT) X(vkCmdPushConstants) X(vkCmdDrawMeshTasksEXT) X(vkCmdDrawMeshTasksIndirectEXT) \
-     X(vkCmdDrawIndirectCount) X(vkCmdDrawIndexedIndirectCount)
-@@ -307,6 +307,11 @@ TWO(vkCmdSetStencilCompareMask) TWO(vkCmdSetStencilWriteMask) TWO(vkCmdSetStenci
+     X(vkCmdDrawIndirectCount) X(vkCmdDrawIndexedIndirectCount) X(vkCmdBeginQuery) X(vkCmdEndQuery)
+@@ -309,6 +309,11 @@ TWO(vkCmdSetStencilCompareMask) TWO(vkCmdSetStencilWriteMask) TWO(vkCmdSetStenci
  static void VKAPI_CALL e_vkCmdSetDepthBias(VkCommandBuffer cb, float a, float b, float c) {
      DIRECT(vkCmdSetDepthBias, cb, a, b, c); BEGIN(r_val, E_vkCmdSetDepthBias, 0); r->f[0] = a; r->f[1] = b; r->f[2] = c; END();
  }
@@ -125,10 +125,10 @@ index 0bd03021..c77d33b7 100644
 +    BEGIN(r_val, E_vkCmdSetDepthBias2EXT, 0); r->f[0] = i->depthBiasConstantFactor; r->f[1] = i->depthBiasClamp; r->f[2] = i->depthBiasSlopeFactor;
 +    r->v[0] = rp != NULL; r->v[1] = rp ? (uint32_t)rp->depthBiasRepresentation : 0; r->v[2] = rp ? rp->depthBiasExact : 0; END();
 +}
- static void VKAPI_CALL e_vkCmdSetBlendConstants(VkCommandBuffer cb, const float c[4]) {
-     DIRECT(vkCmdSetBlendConstants, cb, c); BEGIN(r_val, E_vkCmdSetBlendConstants, 0); memcpy(r->f, c, 16); END();
+ static void VKAPI_CALL e_vkCmdSetDepthBounds(VkCommandBuffer cb, float lo, float hi) {
+     DIRECT(vkCmdSetDepthBounds, cb, lo, hi); BEGIN(r_val, E_vkCmdSetDepthBounds, 0); r->f[0] = lo; r->f[1] = hi; END();
  }
-@@ -400,6 +405,8 @@ static void run(const hdr *h) {
+@@ -413,6 +418,8 @@ static void run(const hdr *h) {
      case E_vkCmdSetStencilWriteMask: { C(r_val); R.vkCmdSetStencilWriteMask(r->cb, r->v[0], r->v[1]); break; }
      case E_vkCmdSetStencilReference: { C(r_val); R.vkCmdSetStencilReference(r->cb, r->v[0], r->v[1]); break; }
      case E_vkCmdSetDepthBias: { C(r_val); R.vkCmdSetDepthBias(r->cb, r->f[0], r->f[1], r->f[2]); break; }

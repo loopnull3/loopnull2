@@ -33,8 +33,12 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   controllers connected in.
 - Korean translation of everything LoopNative shows.
 
-## LoopNative Pack (Banana Native v0.3.45, modified)
+## LoopNative Pack (Banana Native v0.3.51, modified)
 
+- **Banana Native v0.3.51** in place of v0.3.45: games do not wait for shaders they can play
+  without, the RAM saver's level reaches the texture cache, the depth bounds test and indirect
+  quad draws work, and the in-game menu is built on its new drawer. Built shaders stay; a game's
+  code is rewritten once at its next start.
 - The engine that rebuilds a game's files: Prepare rewrites its code and translates its shaders
   into a pack, then runs the code natively with NVN on Vulkan.
 - **8 GB class** (Galaxy Z Flip5): RAM saver: Strong, less vegetation, memory pools placed in

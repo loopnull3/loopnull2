@@ -284,7 +284,7 @@ final class GameSettings {
     /** Builds the page into content (Ui.page's column); again builds it once more after a choice (keeping the place), close returns to Home */
     static void build(MainActivity a, LinearLayout outer, Game g, Runnable again, Runnable close) {
         String id = g.titleId;
-        if (!id.equals(customFor)) { customFor = id; custom = false; }
+        if (!id.equals(customFor)) { customFor = id; custom = Prefs.customPicked(a, id); }
         boolean wide = a.getResources().getConfiguration().screenWidthDp >= 600;
         String missing = Profile.missing(id, g.name);
         String[] keys = missing == null ? new String[] {PERFORMANCE, GAME, SAVES, STORAGE} : new String[] {SAVES, STORAGE};
@@ -327,8 +327,8 @@ final class GameSettings {
             card.addView(Ui.text(a, Tx.s(R.string.game_recommended_for_this_phone), 15, R.color.bn_text, 700));
             Ui.Segmented[] seg = new Ui.Segmented[1];
             seg[0] = Ui.add(card, new Ui.Segmented(a, new String[] {Tx.s(R.string.game_recommended), Tx.s(R.string.game_custom)}, 0, k -> {
-                if (k == 1) { custom = true; refresh[0].run(); return; }   // Custom keeps the player's values: nothing to change
-                if (Recommend.changedCount(Prefs.recStates(a, id)) == 0) { custom = false; refresh[0].run(); return; }
+                if (k == 1) { custom = true; Prefs.customPicked(a, id, true); refresh[0].run(); return; }   // Custom keeps the player's values: nothing to change
+                if (Recommend.changedCount(Prefs.recStates(a, id)) == 0) { custom = false; Prefs.customPicked(a, id, false); refresh[0].run(); return; }
                 new PadFocus.Builder(a).setTitle(Tx.s(R.string.game_title_for, Tx.s(R.string.game_use_recommended), g.name))
                         .setMessage(Tx.s(R.string.game_the_settings_you_changed_for))
                         .setPositiveButton(Tx.s(R.string.game_use_recommended), (x, w) -> { Prefs.backToRecommended(a, id); custom = false; again.run(); })
@@ -342,8 +342,8 @@ final class GameSettings {
                 for (Recommend.State st : now) { Ui.Setting r = recRows.get(st.setting); if (r != null) decorate(a, id, r, st); }
                 int n = Recommend.changedCount(now);
                 String l = Recommend.line(now, (s, v) -> Prefs.recCardName(a, id, s, v)), c = Recommend.changedLine(n);
-                if (n > 0) custom = false;   // the changed count decides from here on
-                seg[0].select(n > 0 || custom ? 1 : 0);
+                if (n > 0 && !custom) { custom = true; Prefs.customPicked(a, id, true); }   // a changed recommended setting is a Custom choice too, kept
+                seg[0].select(Recommend.showsCustom(custom, n) ? 1 : 0);   // Custom stays until the player picks Recommended (kept per game: Prefs.customPicked)
                 if (l != null) values.setText(l);
                 changed.setText(c != null ? c + " " + Tx.s(R.string.game_recommended_puts_them_back) : custom ? Tx.s(R.string.game_your_own_values_stay_change) : "");
                 changed.setVisibility(changed.length() == 0 ? View.GONE : View.VISIBLE);
@@ -380,7 +380,7 @@ final class GameSettings {
         if (simple) {   // the Upscaler stays as stored (GameActivity reads the preference); only testers change it for a game with Resolution presets
         } else if (Prefs.dlssGame(id)) {   // a game on the DLSS stand-in (game.tsv dlss_standin): its Upscaler is the stand-in (GSR2's sliders under GSR 2, the sharpness under FSR 1)
             int dm = GameUpscaler.dlssMode(a, id);
-            picture.add(track(recRows, Recommend.UPSCALER, new Ui.Setting(a, "🔍", Tx.s(R.string.common_upscaler), v -> dlssMode(a, g, again)).value(shortName(Tx.arr(R.array.arr_dlss_modes)[dm])).chevron(a)));
+            picture.add(track(recRows, Recommend.UPSCALER, new Ui.Setting(a, "🔍", Tx.s(R.string.common_game_upscaler), v -> dlssMode(a, g, again)).value(shortName(Tx.arr(R.array.arr_dlss_modes)[dm])).chevron(a)));
             if (DlssTune.showsClarity(dm))
                 picture.add(new Ui.Setting(a, "🌀", Tx.s(R.string.game_motion_clarity), v -> clarity(a, g, again)).value(dflt(GameUpscaler.ownClarity(a, id), DlssTune.clarityName(GameUpscaler.clarity(a, id)))).chevron(a).sub());
             if (DlssTune.showsSharp(dm))
@@ -420,6 +420,10 @@ final class GameSettings {
         }
         if (Prefs.drsGame(id) && !simple)   // the host's dynamic resolution slider: testers only for a game with Resolution presets (Quality is the game's own dynamic resolution)
             speed.add(track(recRows, Recommend.DRS, new Ui.Setting(a, "📏", Tx.s(R.string.common_dynamic_resolution), v -> drs(a, g, again)).value(drsValue(Prefs.drs(a, id))).chevron(a)));
+        // The ADPF reports against the game's shortest period with any GPU clock floor (DM_VK_ADPF_SPAN_ANY): fixes a game stuck at a low frame rate after a menu on a phone whose
+        // system caps the GPU from those reports, at the cost of a higher GPU clock in menus (heat), so off unless the player turns it on
+        speed.add(new Ui.Setting(a, "🌡️", Tx.s(R.string.game_keep_gpu_clock_up), null).toggle(a, Prefs.keepGpuUp(a, id), (b, on) -> Prefs.keepGpuUp(a, id, on))
+                .says(Tx.s(R.string.game_keep_gpu_clock_up_on), Tx.s(R.string.game_keep_gpu_clock_up_off)));
         speed.add(track(recRows, Recommend.DRIVER, new Ui.Setting(a, "🎮", Tx.s(R.string.common_gpu_driver), v -> driver(a, g, again)).value(driverShort(a, id)).chevron(a)));
 
         // ---- Game options: the profile's own switches ----
@@ -1098,7 +1102,7 @@ final class GameSettings {
     }
 
     private static void dlssMode(MainActivity a, Game g, Runnable done) {   // the DLSS stand-in's mode (GameUpscaler.dlssMode, DM_VK_DLSS); the in-game panel changes it live
-        choose(a, Tx.s(R.string.game_title_for, Tx.s(R.string.common_upscaler), g.name), Tx.arr(R.array.arr_dlss_modes), firstLabel(recLabel(Tx.arr(R.array.arr_dlss_modes), Recommend.DLSS_MODES, Prefs.rec(a, g.titleId, Recommend.UPSCALER)), Tx.arr(R.array.arr_dlss_modes)[DlssTune.MODE_DEFAULT]), GameUpscaler.ownDlssMode(a, g.titleId), GameUpscaler.dlssMode(a, g.titleId),
+        choose(a, Tx.s(R.string.game_title_for, Tx.s(R.string.common_game_upscaler), g.name), Tx.arr(R.array.arr_dlss_modes), firstLabel(recLabel(Tx.arr(R.array.arr_dlss_modes), Recommend.DLSS_MODES, Prefs.rec(a, g.titleId, Recommend.UPSCALER)), Tx.arr(R.array.arr_dlss_modes)[DlssTune.MODE_DEFAULT]), GameUpscaler.ownDlssMode(a, g.titleId), GameUpscaler.dlssMode(a, g.titleId),
                v -> GameUpscaler.dlssMode(a, g.titleId, v), done);
     }
 

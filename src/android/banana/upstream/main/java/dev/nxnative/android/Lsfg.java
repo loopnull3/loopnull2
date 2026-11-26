@@ -28,17 +28,41 @@ final class Lsfg {
 
     /** The places looked in, in order; then the app's own folders */
     static final String[] KNOWN = {"/storage/emulated/0/Documents/Emulation/bios/Lossless.dll", "/storage/emulated/0/Switch2/Lossless.dll", "/storage/emulated/0/Download/Lossless.dll"};
-    static final int[] MULTS = {2, 3, 4}, TARGETS = {0, 60, 90, 120}, FLOWS = {25, 50, 75, 100};
+    static final int[] FLOWS = {25, 50, 75, 100};
+
+    /** The main screen's display modes in Hz (the game's window is on it), or null. What PanelRates offers frame generation's choices from */
+    static float[] panelModes(Context c) {
+        try {
+            android.hardware.display.DisplayManager dm = c.getSystemService(android.hardware.display.DisplayManager.class);
+            android.view.Display d = dm == null ? null : dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+            if (d == null) return null;
+            android.view.Display.Mode[] ms = d.getSupportedModes();
+            float[] r = new float[ms.length];
+            for (int i = 0; i < ms.length; i++) r[i] = ms[i].getRefreshRate();
+            return r;
+        } catch (RuntimeException e) { return null; }
+    }
+    /** Android's own peak refresh setting (Settings.System peak_refresh_rate, Display › Smooth display and the like; 0 when unset or not readable) */
+    static float peakHz(Context c) {
+        try { return android.provider.Settings.System.getFloat(c.getContentResolver(), "peak_refresh_rate", 0f); } catch (RuntimeException e) { return 0f; }
+    }
+    /** The fastest refresh the main screen runs a game at (0 = not known: every choice is offered) */
+    static int maxHz(Context c) { return PanelRates.maxHz(panelModes(c), peakHz(c)); }
+    static int[] multipliers(Context c) { return PanelRates.multipliers(maxHz(c)); }
+    static int[] targets(Context c) { return PanelRates.targets(maxHz(c), panelModes(c)); }
 
     static File privateCopy(Context c) { return new File(c.getFilesDir(), "lsfg/Lossless.dll"); }
 
     private static SharedPreferences prefs(Context c) { return Prefs.of(c); }
     static boolean on(Context c) { return prefs(c).getBoolean("lsfg", false); }
-    static int multiplier(Context c) { return prefs(c).getInt("lsfg_mult", 2); }
-    static int target(Context c) { return prefs(c).getInt("lsfg_target", 0); }
+    /** The multiplier and target in use: the saved choice, or the nearest one the screen can show (the saved one stays, for a faster refresh setting later) */
+    static int multiplier(Context c) { return PanelRates.clamp(prefs(c).getInt("lsfg_mult", 2), multipliers(c)); }
+    static int target(Context c) { return PanelRates.clamp(prefs(c).getInt("lsfg_target", 0), targets(c)); }
     /** Motion estimation resolution, % of the picture: 50 by default (at 1280x720 on an Adreno 740, 3x at the game's own 33 fps where 100 % was not worth one
      *  generated frame). The old Auto (0) was the full size: read as 100 */
     static int flow(Context c) { int v = prefs(c).getInt("lsfg_flow", 50); return v <= 0 ? 100 : v; }
+    /** The quality shader set (lsfg-vk's v3.1: more channels, about four times the GPU time) instead of performance; the host falls back to performance without it in the DLL */
+    static boolean quality(Context c) { return prefs(c).getBoolean("lsfg_quality", false); }
 
     /** Where the DLL in use came from (for the main screen and the log) */
     static String note = "";
@@ -103,6 +127,7 @@ final class Lsfg {
         env.add("DM_LSFG_MULT=" + multiplier(c));
         env.add("DM_LSFG_TARGET=" + target(c));
         env.add("DM_LSFG_FLOW=" + flow(c));
+        env.add("DM_LSFG_QUALITY=" + (quality(c) ? 1 : 0));
     }
 
     private static RadioGroup choice(Context c, int[] values, int current, String[] labels, java.util.function.IntConsumer pick) {
@@ -140,21 +165,57 @@ final class Lsfg {
         st.setText(status);
         st.setTextSize(12);
         box.addView(st);
+        // Only the target rates and multipliers the main screen can show (PanelRates: its modes held to Android's peak refresh setting), with a line saying why when some are left out
+        int hz = maxHz(c); int[] tv = targets(c), mv = multipliers(c);
+        String[] tl = new String[tv.length], ml = new String[mv.length];
+        for (int i = 0; i < tv.length; i++) tl[i] = tv[i] == 0 ? Tx.s(R.string.game_fixed) : String.valueOf(tv[i]);
+        for (int i = 0; i < mv.length; i++) ml[i] = mv[i] + "x";
         TextView l2 = new TextView(c); l2.setText(Tx.s(R.string.game_target_frame_rate)); opts.addView(l2);
-        opts.addView(choice(c, TARGETS, target(c), new String[]{Tx.s(R.string.game_fixed), "60", "90", "120"}, v -> { prefs(c).edit().putInt("lsfg_target", v).commit(); vis.run(); apply.run(); }));
+        opts.addView(choice(c, tv, target(c), tl, v -> { prefs(c).edit().putInt("lsfg_target", v).commit(); vis.run(); apply.run(); }));
         TextView l1 = new TextView(c); l1.setText(Tx.s(R.string.game_frames_per_game_frame)); fixed.addView(l1);
-        fixed.addView(choice(c, MULTS, multiplier(c), new String[]{"2x", "3x", "4x"}, v -> { prefs(c).edit().putInt("lsfg_mult", v).commit(); apply.run(); }));
+        fixed.addView(choice(c, mv, multiplier(c), ml, v -> { prefs(c).edit().putInt("lsfg_mult", v).commit(); apply.run(); }));
         opts.addView(fixed);
+        if (hz > 0 && (mv.length < PanelRates.MULTS.length || tv.length < PanelRates.TARGETS.length + 1)) {
+            TextView lim = new TextView(c); lim.setText(Tx.s(R.string.game_lsfg_screen_limit, hz)); lim.setTextSize(12); opts.addView(lim);
+        }
         TextView l3 = new TextView(c); l3.setText(Tx.s(R.string.game_motion_estimation_resolution_lower_i)); opts.addView(l3);
         opts.addView(choice(c, FLOWS, flow(c), new String[]{"25%", "50%", "75%", "100%"}, v -> { prefs(c).edit().putInt("lsfg_flow", v).commit(); apply.run(); }));
-        TextView mode = new TextView(c);   // Eden ports only the performance shader set (lossless_dll.h PerformanceShader); the quality set would need its own chain
-        mode.setText(Tx.s(R.string.game_mode_performance_the_only_shader));
-        mode.setTextSize(12);
-        opts.addView(mode);
+        TextView l4 = new TextView(c); l4.setText(Tx.s(R.string.game_lsfg_shaders)); opts.addView(l4);   // the shader set (lsfg_chain.c: performance or quality)
+        opts.addView(choice(c, new int[]{0, 1}, quality(c) ? 1 : 0, new String[]{Tx.s(R.string.game_performance), Tx.s(R.string.game_lsfg_quality)},
+                            v -> { prefs(c).edit().putBoolean("lsfg_quality", v == 1).commit(); apply.run(); }));
         box.addView(opts);
         vis.run();
         return st;
     }
 
-    static void push(Context c) { Native.frameGenSet(on(c), multiplier(c), target(c), flow(c)); }
+    static void push(Context c) { Native.frameGenQuality(quality(c)); Native.frameGenSet(on(c), multiplier(c), target(c), flow(c)); }
+
+    /**
+     * While the game runs (GameActivity.hostSetup to onDestroy): the multiplier and target in use follow the screen. A saved 4x held to 2x on a screen at 60 Hz stayed 2x
+     * after the screen was set to 120 Hz with the game running (the AYN Thor's own setting), until the next start, as nothing gave the host the new value. Android's peak
+     * refresh setting and the main display are watched, and the host gets the settings again when what they allow changes. Returns what stops the watching
+     */
+    static Runnable follow(Context c, android.os.Handler h) {
+        final int[] last = {multiplier(c), target(c)};
+        Runnable check = () -> {
+            int m = multiplier(c), t = target(c);
+            if (m == last[0] && t == last[1]) return;
+            last[0] = m; last[1] = t;
+            Native.note("frame generation: the screen now runs at up to " + maxHz(c) + " Hz: " + m + "x, target " + (t == 0 ? "fixed" : t + " fps"));
+            push(c);
+        };
+        android.database.ContentObserver obs = new android.database.ContentObserver(h) { @Override public void onChange(boolean self) { check.run(); } };
+        try { c.getContentResolver().registerContentObserver(android.provider.Settings.System.getUriFor("peak_refresh_rate"), false, obs); } catch (RuntimeException e) { /* not watched: the display listener still is */ }
+        android.hardware.display.DisplayManager dm = c.getSystemService(android.hardware.display.DisplayManager.class);
+        android.hardware.display.DisplayManager.DisplayListener dl = new android.hardware.display.DisplayManager.DisplayListener() {
+            @Override public void onDisplayAdded(int id) {}
+            @Override public void onDisplayRemoved(int id) {}
+            @Override public void onDisplayChanged(int id) { if (id == android.view.Display.DEFAULT_DISPLAY) check.run(); }
+        };
+        if (dm != null) dm.registerDisplayListener(dl, h);
+        return () -> {
+            try { c.getContentResolver().unregisterContentObserver(obs); } catch (RuntimeException e) { /* never registered */ }
+            if (dm != null) dm.unregisterDisplayListener(dl);
+        };
+    }
 }

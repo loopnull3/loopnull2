@@ -376,10 +376,16 @@ public final class HokkaidoBridge {
 
     /** Holds the shader tools' version (shaderToolsVersion) the pack's shaders were last dropped for, then what was removed. */
     private static final String SHADER_TOOLS_MARK = "hokkaido-shader-tools";
+    /** What the mark held with the Banana Native v0.3.45 embed (its assets/pack/version.txt), and the shader tools' digest that embed had. */
+    private static final String MARK_0345 = "b24fbf54e7e25f61", TOOLS_0345 = "ff0fc1af97a6";
 
-    /** The shader tools' version, assets/pack/version.txt, which pack_tools/patch_pack_tools.py changes with every change to Hokkaido's tools; null when unreadable. */
+    /**
+     * The shader tools' digest with Hokkaido's changes, assets/pack/shader_tools.txt (pack_tools/patch_pack_tools.py): it changes when the files a
+     * shader library is made from change; null when unreadable. Not assets/pack/version.txt, which it was: that one changes with every tool of the
+     * packer, so another Banana Native release with the same shader tools (v0.3.45 to v0.3.51) would drop every game's shaders for nothing.
+     */
     private static String shaderToolsVersion(Context c) {
-        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getAssets().open("pack/version.txt"), java.nio.charset.StandardCharsets.UTF_8))) {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getAssets().open("pack/shader_tools.txt"), java.nio.charset.StandardCharsets.UTF_8))) {
             String v = r.readLine();
             return v == null || v.trim().isEmpty() ? null : v.trim();
         } catch (IOException e) {
@@ -398,7 +404,16 @@ public final class HokkaidoBridge {
         if (tools == null) return;
         File sh = new File(packDir, "shaders"), mark = new File(sh, SHADER_TOOLS_MARK);
         try {
-            if (mark.isFile() && tools.equals(java.nio.file.Files.readAllLines(mark.toPath()).stream().findFirst().orElse("").trim())) return;
+            if (mark.isFile()) {
+                java.util.List<String> lines = java.nio.file.Files.readAllLines(mark.toPath());
+                String was = lines.isEmpty() ? "" : lines.get(0).trim();
+                if (tools.equals(was)) return;
+                if (MARK_0345.equals(was) && TOOLS_0345.equals(tools)) {   // the same shader tools under the mark's earlier name: nothing to drop
+                    lines.set(0, tools);
+                    java.nio.file.Files.write(mark.toPath(), lines, java.nio.charset.StandardCharsets.UTF_8);
+                    return;
+                }
+            }
         } catch (IOException e) {
             // unreadable: dropped again
         }

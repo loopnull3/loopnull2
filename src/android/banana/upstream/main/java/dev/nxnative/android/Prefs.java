@@ -17,17 +17,40 @@ final class Prefs {
     static SharedPreferences open(Context c, String name) { return c.getSharedPreferences(name, Context.MODE_MULTI_PROCESS); }
     static SharedPreferences of(Context c) { return open(c, "launcher"); }
 
-    /** The overlay over the game (master switch: the frame rate and the other items top right, Overlay; the build tag top left is always shown); on by default. DM_OVERLAY=0 / 1 in env.txt overrides it for a run. */
-    /** Whether the check at start also offers a small fix release ("Update type: hotfix" in its notes); off: only major and critical releases (UpdateCheck.kind). Default on */
-    static boolean hotfixUpdates(Context c) { return of(c).getBoolean("hotfix_updates", true); }
-    static void hotfixUpdates(Context c, boolean on) { of(c).edit().putBoolean("hotfix_updates", on).commit(); }
+    /**
+     * The update channel (Settings › Updates › Update channel; UpdateCheck.STABLE or HOTFIX): "update_channel", else the older Small fix updates switch
+     * ("hotfix_updates", 0.3.42 to 0.3.45: on = Hotfix, off = Stable) when it was ever written, else UpdateCheck.DEFAULT_CHANNEL (UpdateCheck.channel). Read
+     * on every check, nothing is migrated at start. A choice writes both keys, so an older app installed later (a rollback) keeps the player's choice too.
+     */
+    static String updateChannel(Context c) {
+        SharedPreferences p = of(c);
+        return UpdateCheck.channel(p.getString("update_channel", null), p.contains("hotfix_updates") ? p.getBoolean("hotfix_updates", true) : null);
+    }
+    static void updateChannel(Context c, String channel) {
+        of(c).edit().putString("update_channel", channel).putBoolean("hotfix_updates", !UpdateCheck.skipsHotfix(channel)).commit();
+    }
 
+    /** Settings › Updates › Back up saves before updating (UpdateBackupUi): every changed save is backed up before an in-app update installs; on by default, written only when toggled */
+    /** The update tag the player last saw in Settings (the update dot on Home's Settings button goes until a newer one comes) */
+    static String updateSeen(Context c) { return of(c).getString("update_seen", ""); }
+    static void updateSeen(Context c, String tag) { of(c).edit().putString("update_seen", tag).apply(); }
+    static boolean backupBeforeUpdate(Context c) { return of(c).getBoolean("backup_before_update", true); }
+    static void backupBeforeUpdate(Context c, boolean on) { of(c).edit().putBoolean("backup_before_update", on).commit(); }
+
+    /** The overlay over the game (master switch: the frame rate and the other items top right, Overlay; the build tag top left is always shown); on by default. DM_OVERLAY=0 / 1 in env.txt overrides it for a run. */
     static boolean overlay(Context c) { return of(c).getBoolean("overlay", true); }
     static void overlay(Context c, boolean on) { of(c).edit().putBoolean("overlay", on).commit(); }
+
+    /** Whether GameActivity shows the newest log lines over the black screen until the game's first frame (on by default; crashes still show). */
+    static boolean startupLog(Context c) { return of(c).getBoolean("startup_log", false); }
+    static void startupLog(Context c, boolean on) { of(c).edit().putBoolean("startup_log", on).commit(); }
 
     /** Home's tile order the player chose (GameOrder: game ids, one per line); empty: the order the games were added in */
     static java.util.List<String> gameOrder(Context c) { return GameOrder.decode(of(c).getString("game_order", "")); }
     static void gameOrder(Context c, java.util.List<String> ids) { of(c).edit().putString("game_order", GameOrder.encode(ids)).commit(); }
+    /** The names the player gave games (GameNames: one line per game); empty: none */
+    static String gameNames(Context c) { return of(c).getString("game_names", ""); }
+    static void gameNames(Context c, String v) { of(c).edit().putString("game_names", v).commit(); }
     /** Home's layout (HomeLayout): 0 the sideways row of tiles (default), 1 a grid with the names, 2 a list */
     static int homeLayout(Context c) { return of(c).getInt("home_layout", 0); }
     static void homeLayout(Context c, int v) { of(c).edit().putInt("home_layout", v).commit(); }
@@ -199,7 +222,7 @@ final class Prefs {
     /** The recommended frame rate cap as the launcher stores it (Recommend.cap), null for none */
     static Integer recCap(Context c, String titleId) { return Recommend.cap(rec(c, titleId, Recommend.FPS_CAP), limited(titleId)); }
     /** Game settings › Reset to defaults: every choice of the game's own back to the main screen's default (Extra environment's lines stay) */
-    static final String[] GAME_SETTINGS = {"window", "render_pct", "gfx_quality", "fps_cap", "gpu_driver", "gpu_ts", "pause_return", "ndsr_choice2", "ndsr_sharp", "drs2", "ram_saver", "ram_saver_strong", "decouple", "hold60", "full_vegetation", "gsr2_clarity", "dlss_sharp", "dlss_mode", "scene_res", "res_preset", "aspect", "cheats", "screen_scale"};
+    static final String[] GAME_SETTINGS = {"window", "render_pct", "gfx_quality", "fps_cap", "gpu_driver", "gpu_ts", "pause_return", "ndsr_choice2", "ndsr_sharp", "drs2", "ram_saver", "ram_saver_strong", "decouple", "hold60", "vk_adpf_span_any", "full_vegetation", "gsr2_clarity", "dlss_sharp", "dlss_mode", "scene_res", "res_preset", "aspect", "cheats", "screen_scale", "custom_card"};
     static void resetGame(Context c, String titleId) {
         SharedPreferences.Editor e = of(c).edit();
         for (String k : GAME_SETTINGS) e.remove(gameKey(k, titleId));
@@ -295,9 +318,15 @@ final class Prefs {
     }
     private static boolean own(Context c, String key, String titleId) { return of(c).contains(gameKey(key, titleId)); }
 
+    /** The player picked Custom on the Recommended / Custom card of Game settings (kept per game, so it survives leaving the page, an app update and Prepare again: the card shows
+     *  Custom while the player's own values for settings that have no recommendation, such as RAM saver, stand); only Recommended (backToRecommended) and Reset to defaults clear it */
+    static boolean customPicked(Context c, String titleId) { return of(c).getBoolean(gameKey("custom_card", titleId), false); }
+    static void customPicked(Context c, String titleId, boolean on) { if (on) of(c).edit().putBoolean(gameKey("custom_card", titleId), true).commit(); else of(c).edit().remove(gameKey("custom_card", titleId)).commit(); }
+
     /** Game settings › Use recommended (the "Recommended for this phone" card): the game's own values of the settings that have a recommendation on this phone are removed, so they take it again; the rest stays */
     static void backToRecommended(Context c, String titleId) {
         SharedPreferences.Editor e = of(c).edit();
+        e.remove(gameKey("custom_card", titleId));
         for (Recommend.State s : recStates(c, titleId))
             if (s.recommended != null) for (String k : Recommend.prefKeys(s.setting, dlssGame(titleId))) e.remove(gameKey(k, titleId));
         e.commit();
@@ -534,6 +563,13 @@ final class Prefs {
     /** Game settings › Classic render passes (DM_VK_CLASSIC_RP): VkRenderPasses with imageless framebuffers instead of dynamic rendering. Off by default (a GPU loss on Adreno 830 with Turnip, open) */
     static boolean classicPasses(Context c, String titleId) { return of(c).getBoolean(gameKey("vk_classic_rp", titleId), false); }
     static void classicPasses(Context c, String titleId, boolean on) { of(c).edit().putBoolean(gameKey("vk_classic_rp", titleId), on).commit(); }
+    /**
+     * Game settings › Speed › Keep GPU clock up (DM_VK_ADPF_SPAN_ANY=1): the performance hint session's reports measure each frame against the game's shortest
+     * period whenever any GPU clock floor is on, so a system that caps the GPU from the reports (a host-DCVS Adreno) does not walk the cap down in a menu and keep it there.
+     * Off by default: the GPU stays at a higher clock in menus for every game, so the phone runs warmer (docs/reference/frame-rate.md "The GPU stays at a low clock after a menu")
+     */
+    static boolean keepGpuUp(Context c, String titleId) { return of(c).getBoolean(gameKey("vk_adpf_span_any", titleId), false); }
+    static void keepGpuUp(Context c, String titleId, boolean on) { of(c).edit().putBoolean(gameKey("vk_adpf_span_any", titleId), on).commit(); }
     /** Game settings › Fast FP16 shader math (TU_DEBUG=fp16, FD_MESA_DEBUG=fp16: Mesa reads them, the host reads no DM_ switch): native 16-bit half-precision ALU instructions on Turnip. Off by default */
     static boolean fp16(Context c, String titleId) { return of(c).getBoolean(gameKey("vk_fp16", titleId), false); }
     static void fp16(Context c, String titleId, boolean on) { of(c).edit().putBoolean(gameKey("vk_fp16", titleId), on).commit(); }
@@ -657,6 +693,9 @@ final class Prefs {
     static String buildId() {
         return Signer.buildId(BuildConfig.NX_PLAY, BuildConfig.VERSION_NAME, BuildConfig.NX_COMMIT, BuildConfig.NX_DIRTY, BuildConfig.NX_BRANCH);
     }
+
+    /** This build's kind (BuildKind.of on BuildConfig): preview, hotfix, critical, major, or "" for a test build */
+    static String buildKind() { return BuildKind.of(BuildConfig.VERSION_NAME, BuildConfig.NX_RELEASE_KIND); }
 
     private static String buildTag() { return Signer.buildTag(BuildConfig.NX_PLAY, buildId()); }
 

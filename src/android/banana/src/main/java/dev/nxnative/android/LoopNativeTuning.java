@@ -65,10 +65,10 @@ public final class LoopNativeTuning {
     private static final String[] MEMORY_CLASS_ROWS = {"DM_VK_PLACE_PART_MB"};
     private static final String[] TWELVE_GB_VALUES = {"256"};
     private static final String[] EIGHT_GB_VALUES = {"256"};
-    /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.45). */
+    /** The profile with low-RAM keys of its own for the 12 GB class (Banana Native v0.3.51). */
     private static final String FIRE_EMBLEM = "04007EF01F8AE000";
 
-    /** The game whose profile keeps soft textures on (game.tsv tex_soft on, Banana Native v0.3.45). */
+    /** The game whose profile keeps soft textures on (game.tsv tex_soft on, Banana Native v0.3.51). */
     private static final String MARIO_KART_WORLD = "0400C3F00006E000";
 
     /** Soft textures when the game's Advanced row is not set: what its profile says, and on with the RAM saver. */

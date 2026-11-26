@@ -52,7 +52,9 @@ public final class MainActivity extends Activity {
     private View accessCard;
     private BananaBackgroundView bananas;   // the drifting bananas behind the screen
     private TextView poppedText;   // Settings › About: "Bananas Popped: n" (null when Settings is not shown)
-    private Ui.Setting overlayRow, resRow, capRow, upsRow, sharpRow, drsRow, lsfgRow, gpuRow, updateRow, timeRow;
+    private Ui.Setting overlayRow, resRow, capRow, upsRow, sharpRow, drsRow, lsfgRow, gpuRow, updateRow, timeRow, channelRow;
+    /** The update dot on the dock's Settings button (Updater.dot) */
+    private View updateDot; private View settingsButton;
     private boolean resumed, settingsPage;
     private boolean usersPage;   // the Users page (UsersUi) in place of Home
     private String usersEdit;   // the player whose own page it shows, else the page of all players
@@ -89,6 +91,7 @@ public final class MainActivity extends Activity {
         build();
         if (saved == null) { setIntent(gated(getIntent())); fromIntent(getIntent()); GameReturn.back(this, getIntent()); }   // start() reads no_pause from getIntent() too; GameReturn: Home made anew by the app's icon while a game runs
         GpuGl.probe(this, () -> { if (!isFinishing() && settingsGame != null) gameSettingsAgain(); });   // the GPU's name and, before any readiness check, the system driver's facts for the recommendations
+        Updater.changed = this::updatesChanged;
         Updater.onStart(this);   // the release app: a newer release on GitHub opens the update popup (once per process start: not on a resume or a rotation)
     }
 
@@ -412,6 +415,8 @@ public final class MainActivity extends Activity {
         logo.setContentDescription(Tx.s(R.string.home_banana_native));
         logo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         top.addView(logo);
+        TextView kindChip = buildKindChip();   // Preview or Hotfix: this build is not a weekly release
+        if (kindChip != null) { LinearLayout.LayoutParams kl = Ui.wrap(); kl.setMarginStart(dp(10)); top.addView(kindChip, kl); }
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         top.addView(dock(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)));
         content.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
@@ -431,6 +436,19 @@ public final class MainActivity extends Activity {
         holder.addView(addFab, fl);
         content.addView(holder, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         refresh();
+    }
+
+    /** A small chip beside the logo for a preview ("Preview", the warning tint) or a hotfix or critical build ("Hotfix"); null for a weekly release and a test build (BuildKind) */
+    private TextView buildKindChip() {
+        String kind = Prefs.buildKind();
+        boolean preview = "preview".equals(kind);
+        if (!preview && !BuildKind.isHotfix(kind)) return null;
+        TextView t = Ui.chip(this, Tx.s(preview ? R.string.settings_channel_preview : R.string.settings_channel_hotfix));
+        if (preview) {
+            t.setBackground(Ui.round(Ui.col(this, R.color.bn_warn_tint), dp(999), 0, 0));
+            t.setTextColor(Ui.col(this, R.color.bn_text));
+        }
+        return t;
     }
 
     /** The dock: round buttons in a pill. The first is the user (the console's users, what games start with): its letter is the current user's, as the profile icon of a console's home */
@@ -461,7 +479,17 @@ public final class MainActivity extends Activity {
         up.leftMargin = up.rightMargin = dp(3);
         dockRow.addView(userButton, up);
         dockRow.addView(dockButton(R.drawable.ic_wiki, Tx.s(R.string.settings_player_wiki), false, v -> openLink(WIKI_URL)));
-        dockRow.addView(dockButton(R.drawable.ic_settings, Tx.s(R.string.home_settings), false, v -> page(true)));
+        settingsButton = dockButton(R.drawable.ic_settings, Tx.s(R.string.home_settings), false, v -> page(true));
+        FrameLayout sb = new FrameLayout(this);   // the button with the update dot in its corner
+        sb.setLayoutParams(settingsButton.getLayoutParams());
+        settingsButton.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        sb.addView(settingsButton);
+        updateDot = new View(this);
+        updateDot.setBackground(Ui.round(Ui.col(this, R.color.bn_banana_deep), dp(999), Ui.col(this, R.color.bn_bg), dp(2)));
+        FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(dp(11), dp(11), android.view.Gravity.TOP | android.view.Gravity.END);
+        sb.addView(updateDot, dl);
+        dockRow.addView(sb);
+        refreshUpdateDot();
         return dockRow;
     }
 
@@ -470,6 +498,23 @@ public final class MainActivity extends Activity {
     /** The dock's user button: the picture of the user games start with (an emoji on its colour) */
     private void styleUserButton() {
         if (userButton != null) UsersUi.styleButton(this, userButton);
+    }
+
+    /** The dock's update dot: shown while Updater.dot says so; the button then also says it to TalkBack */
+    private void refreshUpdateDot() {
+        if (updateDot == null) return;
+        boolean on = Updater.dot(this);
+        updateDot.setVisibility(on ? View.VISIBLE : View.GONE);
+        UpdateCheck.Update p = Updater.waiting;
+        settingsButton.setContentDescription(Tx.s(R.string.home_settings) + (on && p != null ? ", " + Tx.s(R.string.settings_update_ready, p.label()) : ""));
+    }
+
+    /** A check stored its results (Updater.changed): the dot, and the Updates rows when Settings shows */
+    private void updatesChanged() {
+        if (settingsPage && settingsGame == null) Updater.seen(this);
+        refreshUpdateDot();
+        if (updateRow != null) updateRow.value(Updater.versionText(this));
+        if (channelRow != null) channelRow.value(Updater.channelValue(Prefs.updateChannel(this)));
     }
 
     private View dockButton(int drawable, String name, boolean accent, View.OnClickListener l) {
@@ -706,9 +751,14 @@ public final class MainActivity extends Activity {
         LinearLayout upd = settingsCard(content);
         updateRow = new Ui.Setting(this, "🔄", Tx.s(R.string.common_check_for_updates), v -> Updater.checkNow(this)).chevron(this);
         upd.addView(updateRow.view);
-        upd.addView(new Ui.Setting(this, "🩹", Tx.s(R.string.settings_small_fix_updates), null)
-                .toggle(this, Prefs.hotfixUpdates(this), (b, on) -> Prefs.hotfixUpdates(this, on))
-                .value(Tx.s(R.string.settings_small_fix_updates_help)).view);
+        channelRow = Updater.channelSetting(this);   // Update channel: Stable, Hotfix or Preview; names a newer release on another channel
+        upd.addView(channelRow.view);
+        String runLine = Updater.runningBuild(Prefs.updateChannel(this));   // what kind of build this is: a preview or a hotfix says so; a weekly release says nothing
+        if (!runLine.isEmpty()) Ui.add(upd, Ui.small(this, runLine), 8);
+        Updater.seen(this);   // Settings shows the waiting update: the dot goes (a critical one keeps it)
+        upd.addView(new Ui.Setting(this, "💾", Tx.s(R.string.settings_backup_before_update), null)   // UpdateBackupUi: the saves outside app storage before an update installs
+                .toggle(this, Prefs.backupBeforeUpdate(this), (b, on) -> Prefs.backupBeforeUpdate(this, on))
+                .value(Tx.s(R.string.settings_backup_before_update_note)).view);
         upd.addView(new Ui.Setting(this, "📖", Tx.s(R.string.settings_player_wiki), v -> openLink(WIKI_URL)).chevron(this)
                 .value(Tx.s(R.string.settings_guides_what_every_setting_does)).view);
 
@@ -776,6 +826,9 @@ public final class MainActivity extends Activity {
                 .setSingleChoiceItems(Overlay.labelChoices(), Prefs.layerLabel(this), (d, w) -> { Prefs.layerLabel(this, w); labelRow.value(Overlay.labelChoices()[w]); d.dismiss(); })
                 .setNegativeButton(Tx.s(R.string.common_cancel), null).show());
         play.addView(labelRow.view);
+        play.addView(new Ui.Setting(this, "📜", Tx.s(R.string.settings_startup_log), null)
+                .toggle(this, Prefs.startupLog(this), (b, on) -> Prefs.startupLog(this, on))
+                .value(Tx.s(R.string.settings_startup_log_note)).view);
         Ui.Setting touch = new Ui.Setting(this, "🎮", Tx.s(R.string.common_on_screen_controls), null).chevron(this);
         touch.view.setOnClickListener(v -> new PadFocus.Builder(this).setTitle(Tx.s(R.string.common_on_screen_controls))
                 .setSingleChoiceItems(Tx.arr(R.array.arr_touch_mode), TouchControls.mode(this), (d, w) -> { TouchControls.mode(this, w); touch.value(touchLabel(w)); d.dismiss(); })
@@ -914,7 +967,7 @@ public final class MainActivity extends Activity {
     /** The settings rows' current values (after a dialog, on resume) */
     private void refreshSettings() {
         if (overlayRow == null) return;
-        updateRow.value(Tx.s(R.string.settings_banana_native_version, Updater.version(this)) + (Updater.available(this) ? "" : Tx.s(R.string.home_release_app_only)));
+        updateRow.value(Updater.versionText(this));
         boolean ov = Prefs.overlay(this);
         if (overlayRow.toggle.isChecked() != ov) overlayRow.toggle.setChecked(ov);
         int n = 0;
@@ -939,7 +992,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onNewIntent(Intent i) {
         super.onNewIntent(i);
-        if (GameReturn.back(this, i)) return;   // the app's icon while a game runs: back to the game, not Home (the launcher's start closed the game's screen above this singleTask root)
+        if (GameReturn.back(this, i)) return;   // the app's icon while a game runs: back to the game, not Home (the icon brought Home's task forward; the game's own task waits behind it)
         fromIntent(i);
     }
 
@@ -995,6 +1048,7 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        GameReturn.homeInRecents(this, true);   // Home's card in Recents again (a game's screen leaves it out while it shows: one card, the game's)
         if (gameBox != null && Game.load(this).size() != games.size()) refresh();   // a card FrontendLaunch added while Home was in the background
         onResumeViews();
         Ondevice.resume(this);
@@ -1064,7 +1118,7 @@ public final class MainActivity extends Activity {
             }
             if (j == null) {   // no update runs for this card: say why instead of "updating" with no count
                 String why = Ondevice.busy(this) ? Tx.s(R.string.home_ready_shader_update_waits)
-                        : Ondevice.deltaShaders(new File(g.packDir), g.titleId) < 0 ? Tx.s(R.string.home_ready_update) : Tx.s(R.string.home_ready_shader_update_starting);
+                        : !Pack.deltaAutomatic(new File(g.packDir), g.titleId) ? Tx.s(R.string.home_ready_update) : Tx.s(R.string.home_ready_shader_update_starting);
                 state(e.getKey(), why, R.color.bn_leaf, ST_SOFT);
                 continue;
             }
@@ -1155,8 +1209,22 @@ public final class MainActivity extends Activity {
         if (shownGames().size() > 1) { labels.add(Tx.s(R.string.home_move_game)); acts.add(() -> startMove(g)); }
         labels.add(Tx.s(R.string.game_cover_set)); acts.add(() -> CoverUi.start(this, g));
         if (CoverUi.has(this, g)) { labels.add(Tx.s(R.string.game_cover_reset)); acts.add(() -> CoverUi.reset(this, g)); }
+        labels.add(Tx.s(R.string.home_rename_game)); acts.add(() -> renameGame(g));
+        if (Game.renamed(this, g)) { labels.add(Tx.s(R.string.home_reset_name)); acts.add(() -> { Game.rename(this, g, ""); refresh(); }); }
         labels.add(Tx.s(R.string.home_delete_game_menu)); acts.add(() -> GameDelete.ask(this, g));
         new PadFocus.Builder(this).setTitle(g.name).setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run()).show();
+    }
+
+    /** Rename game: a text box with the game's name; Save keeps what was typed (Game.rename), an empty box gives the game's own name back */
+    private void renameGame(Game g) {
+        android.widget.EditText t = new android.widget.EditText(this);
+        t.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        t.setSingleLine(true);
+        t.setText(g.name);
+        t.setSelection(t.getText().length());
+        new PadFocus.Builder(this).setTitle(Tx.s(R.string.home_rename_game)).setView(t)
+                .setPositiveButton(Tx.s(R.string.game_save), (x, w) -> { Game.rename(this, g, t.getText().toString()); refresh(); })
+                .setNegativeButton(Tx.s(R.string.common_cancel), null).show();
     }
 
     // ---- Move: a reorder mode. The game is lifted; D-pad (the grid: all four directions) or a tap on another game's place moves it, A or a tap on it puts it down, B cancels ----
@@ -1234,7 +1302,6 @@ public final class MainActivity extends Activity {
             boolean onTile = f != null && f.getTag() instanceof TileInfo;
             if (games.isEmpty()) { if (pad) hint.set(new String[] {"A", Tx.s(R.string.home_add_game)}); else hint.set(); }
             else if (pad && onTile) hint.set(new String[] {"A", Tx.s(R.string.hint_open)}, new String[] {"X", Tx.s(R.string.hint_options_hold)});
-            else if (!pad) hint.set(new String[] {null, Tx.s(R.string.hint_hold_for_options)});
             else hint.set();
         } else if (pad) hint.set(new String[] {"A", Tx.s(R.string.hint_select)}, new String[] {"B", Tx.s(R.string.hint_back)});
         else hint.set();
@@ -1644,7 +1711,7 @@ public final class MainActivity extends Activity {
                 else if (problem.playable && !problem.prepare) state(st, PrepareText.READY_OLDER(), R.color.bn_leaf, ST_SOFT);   // not a dump: nothing is updated on the phone (the page says where new ones come from)
                 else if (problem.playable && Ondevice.sampling(new File(g.packDir))) { state(st, PrepareText.CHECKING_SHADERS(), R.color.bn_leaf, ST_SOFT | ST_WORKING); updating.put(st, g); updateTick(); updateUi.removeCallbacks(sampleRun); updateUi.postDelayed(sampleRun, 2000); }   // the quick check of the older library (Ondevice.sampledKeep): the card follows it
                 else if (problem.playable && Pack.shaderLayerFills(new File(g.packDir), g.titleId, Prefs.layerEnv(this, g.titleId))) state(st, Tx.s(R.string.home_ready), R.color.bn_leaf, ST_HIDDEN);   // the layer builds what the older library lacks: no "update" to nag about
-                else if (problem.playable && Pack.deltaShaders(new File(g.packDir), g.titleId) < 0) state(st, Tx.s(R.string.home_ready_update), R.color.bn_accent, ST_SOFT);   // an optional shader update: the game's page offers it (GameSettings.shaderUpdateCard)
+                else if (problem.playable && !Pack.deltaAutomatic(new File(g.packDir), g.titleId)) state(st, Tx.s(R.string.home_ready_update), R.color.bn_accent, ST_SOFT);   // an optional shader update (no manifest row, or a large delta): the game's page offers it (GameSettings.shaderUpdateCard)
                 else if (problem.playable) { state(st, Tx.s(R.string.home_ready_updating_shaders), R.color.bn_leaf, ST_SOFT | ST_WORKING); updating.put(st, g); updateTick(); }   // the count follows (updateTick)
                 else if (problem.legacy) state(st, Tx.s(R.string.home_ready_shaders_need_one_update), R.color.bn_accent, ST_SOFT);
                 else state(st, problem.label, problem.prepare || problem.anyway ? R.color.bn_accent : R.color.bn_danger, problem.working ? ST_WORKING : 0);
@@ -1706,10 +1773,10 @@ public final class MainActivity extends Activity {
     void manageGame(Game g) { manage(g); }
 
     /** The optional shader update from the game's page: Home, then Prepare (Ondevice asks first and says what it will make) */
-    void updateShaders(Game g) { page(false); Ondevice.prepare(this, new File(g.gameDir), true); }
+    void updateShaders(Game g) { page(false); Ondevice.prepareShaders(this, new File(g.gameDir), true); }
 
     /** The optional "Prepare shaders" of a game that starts with no library (GameSettings): Home, then Prepare shaders for the whole set (Ondevice asks first and says what it will make) */
-    void prepareShaders(Game g) { page(false); Ondevice.prepare(this, new File(g.gameDir), false); }
+    void prepareShaders(Game g) { page(false); Ondevice.prepareShaders(this, new File(g.gameDir), false); }
 
     /** A game's page (a tap or long press on its tile; GameSettings): its settings, saves and storage under tabs, Play in its header */
     private void manage(Game g) { GameSettings.open(this, g); }

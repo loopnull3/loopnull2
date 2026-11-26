@@ -102,6 +102,8 @@ final class Native {
 
     /** Frame generation's settings for the next frames (nxhost_framegen_set): on, images per game frame 2..4, target rate (0 = fixed), flow scale % (0 = auto). */
     static native void frameGenSet(boolean on, int multiplier, int targetRate, int flowPct);
+    /** Frame generation's shader set (nxhost_framegen_quality): true quality, false performance; the chain is made again at the next frame. */
+    static native void frameGenQuality(boolean quality);
 
     /** "<state> <reason>": state 0 off, 1 generating, 2 on and not generating, -1 unavailable, -2 not in this host. */
     static native String frameGenStatus();

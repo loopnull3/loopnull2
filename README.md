@@ -109,7 +109,7 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).
 
-CI builds the game hosts from Banana Native v0.3.45's source with those patches
+CI builds the game hosts from Banana Native v0.3.51's source with those patches
 (`tools/android/build_bananative_hosts.sh`); the packer's libraries stay the release's.
 
 ## Galaxy Z Flip5
