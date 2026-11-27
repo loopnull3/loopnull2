@@ -30,6 +30,7 @@ Users report game bugs with Lichii logs (`eden_log.txt`, `eden_log.txt.old`). Ea
 | 0400486024DEC000 | The Legend of Zelda: Ocarina of Time |
 | 0400C76024710000 | Pragmata |
 | 0400245021D2C000 | Yoshi and the Mysterious Book |
+| 0100D71004694000 | Minecraft (Switch) |
 
 Add ids here when a report identifies a new game.
 
@@ -101,6 +102,7 @@ On Android, put them in `/sdcard/Android/data/<app id>/files/env.txt`, one `KEY=
 | Device loss (`Device loss occurred!`) | Always on | The `Device fault` lines after it: what VK_EXT_device_fault reports (fault addresses and their type, vendor fault codes). `not supported by the driver` means the driver has no such data. |
 | Driver crash, stall or slow pipeline builds | `EDEN_NX2_PIPELINE_BUILD_TRACE=<file>` | A flushed `BEGIN`/`END` line per driver pipeline build with the pipeline and stage hashes; `END` adds the wall time (`ms=`). The last `BEGIN` without an `END` names the shaders the driver crashed or is stuck on. Times include waiting on other builds, so compare runs from the same cleared driver cache rather than single builds. |
 | Host crash (log just stops) | Windows minidump in `%LOCALAPPDATA%\CrashDumps\lichii.exe.<pid>.dmp` | Read the exception and stack with the `minidump` Python package, then symbolize with `llvm-symbolizer --obj=lichii.exe --inlines --relative-address <offset>` next to the build's `lichii.pdb`. |
+| Host crash on Android (log just stops) | Always on | A `Frontend <Critical> Host crash: uncaught exception: <what>` line when a C++ exception was not caught (oaknut's `out of range` is a branch too far to encode). A signal (SIGSEGV, an abort from elsewhere) leaves no line: read logcat. |
 | Host crash (log just stops) | Always on (Windows): a `Common <Critical> Host crash:` line, then `eden_crash.dmp` next to the log. Without that line, the WER minidump in `%LOCALAPPDATA%\CrashDumps\lichii.exe.<pid>.dmp` if LocalDumps is set up | The line has the exception code, faulting thread (id and name) and the stack as module+offset; `abort()` covers `std::terminate` and fatal asserts, and a CRT invalid-parameter failure has its own line. Symbolize with `llvm-symbolizer --obj=lichii.exe --inlines --relative-address <offset>` next to the build's `lichii.pdb`, and read the dump with the `minidump` Python package. Fail-fast exits (heap corruption, stack cookie) and kills skip it. The file log flushes lines below Error once a second, so a hang, kill or fail-fast loses at most the last second of them. |
 
 ## How work is split

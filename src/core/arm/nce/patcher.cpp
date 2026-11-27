@@ -3,6 +3,7 @@
 
 #include <numeric>
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <bit>
 #include "common/cpu_features.h"
@@ -27,6 +28,69 @@ using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
 
 constexpr size_t MaxRelativeBranch = 128_MiB;
 constexpr u32 ModuleCodeIndex = 0x24 / sizeof(u32);
+// What a patched instruction becomes when no patch section is in reach: udf #0.
+constexpr u32 TrapInstruction = 0x00000000;
+
+namespace {
+
+bool IsPatchSite(u32 inst) {
+    if (SVC{inst}.Verify()) {
+        return true;
+    }
+    if (auto mrs = MRS{inst}; mrs.Verify()) {
+        const u32 reg = mrs.GetSystemReg();
+        return reg == TpidrroEl0 || reg == TpidrEl0 || reg == CntpctEl0 || reg == CntfrqEl0;
+    }
+    auto msr = MSR{inst};
+    return msr.Verify() && msr.GetSystemReg() == TpidrEl0;
+}
+
+bool InBranchRange(ptrdiff_t offset) {
+    return offset % 4 == 0 && offset >= -static_cast<ptrdiff_t>(MaxRelativeBranch) &&
+           offset < static_cast<ptrdiff_t>(MaxRelativeBranch);
+}
+
+// Where a module and its patch sections lie, for the branches between them. Offsets are from
+// the start of the text and of the patch section.
+struct BranchLayout {
+    PatchMode mode;
+    ptrdiff_t patch_size;     ///< The section after the data (before the text in PreText mode).
+    ptrdiff_t pre_patch_size; ///< The section before the text of a split module.
+    ptrdiff_t image_size;     ///< The module, without the section before its text.
+    ptrdiff_t total_size;     ///< From the start of the module to the section after the data.
+
+    ptrdiff_t ToPatch(ptrdiff_t patch_offset, ptrdiff_t module_offset) const {
+        switch (mode) {
+        case PatchMode::PreText:
+            return patch_offset - patch_size - module_offset;
+        case PatchMode::Split:
+            return image_size + patch_offset - module_offset;
+        default:
+            return total_size - module_offset + patch_offset;
+        }
+    }
+
+    ptrdiff_t ToPrePatch(ptrdiff_t patch_offset, ptrdiff_t module_offset) const {
+        return patch_offset - pre_patch_size - module_offset;
+    }
+
+    ptrdiff_t FromPatch(ptrdiff_t patch_offset, ptrdiff_t module_offset) const {
+        switch (mode) {
+        case PatchMode::PreText:
+            return patch_size - patch_offset + module_offset;
+        case PatchMode::Split:
+            return module_offset - image_size - patch_offset;
+        default:
+            return module_offset - total_size - patch_offset;
+        }
+    }
+
+    ptrdiff_t FromPrePatch(ptrdiff_t patch_offset, ptrdiff_t module_offset) const {
+        return pre_patch_size + module_offset - patch_offset;
+    }
+};
+
+} // namespace
 
 // Switch 2 titles are built with pointer authentication. Under NCE the guest runs natively on
 // the host, whose kernel enables real PAC keys (and FEAT_FPAC traps on a failed AUT*). Guest
@@ -157,6 +221,7 @@ bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet
     // Add a new module patch to our list
     modules.emplace_back();
     curr_patch = &modules.back();
+    curr_patch->m_image_size = image_size;
 
     // The first word of the patch section is always a branch to the first instruction of the
     // module.
@@ -181,89 +246,14 @@ bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet
         }
     }
 
-    // Loop through instructions, patching as needed.
+    // Loop through instructions, finding the ones to patch.
+    std::vector<PatchSite> sites;
     for (u32 i = ModuleCodeIndex; i < static_cast<u32>(text_words.size()); i++) {
         const u32 inst = text_words[i];
 
-        const auto AddRelocations = [&](bool& pre_buffer) {
-            const uintptr_t this_offset = i * sizeof(u32);
-            const uintptr_t next_offset = this_offset + sizeof(u32);
-
-            pre_buffer = use_split && (this_offset < MaxRelativeBranch);
-
-            // Relocate to pre- or post-patch
-            if (pre_buffer) {
-                this->BranchToPatchPre(this_offset);
-            } else {
-                this->BranchToPatch(this_offset);
-            }
-
-            // Relocate from patch to next instruction.
-            return next_offset;
-        };
-
-        // SVC
-        if (auto svc = SVC{inst}; svc.Verify()) {
-            bool pre_buffer = false;
-            auto ret = AddRelocations(pre_buffer);
-            if (pre_buffer) {
-                WriteSvcTrampoline(ret, svc.GetValue(), c_pre, m_save_context_pre, m_load_context_pre);
-            } else {
-                WriteSvcTrampoline(ret, svc.GetValue(), c, m_save_context, m_load_context);
-            }
-            continue;
-        }
-
-        // MRS Xn, TPIDR_EL0
-        // MRS Xn, TPIDRRO_EL0
-        if (auto mrs = MRS{inst};
-            mrs.Verify() && (mrs.GetSystemReg() == TpidrroEl0 || mrs.GetSystemReg() == TpidrEl0)) {
-            const auto src_reg = mrs.GetSystemReg() == TpidrroEl0 ? oaknut::SystemReg::TPIDRRO_EL0
-                                                                  : oaknut::SystemReg::TPIDR_EL0;
-            const auto dest_reg = oaknut::XReg{static_cast<int>(mrs.GetRt())};
-            bool pre_buffer = false;
-            auto ret = AddRelocations(pre_buffer);
-            if (pre_buffer) {
-                WriteMrsHandler(ret, dest_reg, src_reg, c_pre);
-            } else {
-                WriteMrsHandler(ret, dest_reg, src_reg, c);
-            }
-            continue;
-        }
-
-        // MRS Xn, CNTPCT_EL0
-        if (auto mrs = MRS{inst}; mrs.Verify() && mrs.GetSystemReg() == CntpctEl0) {
-            bool pre_buffer = false;
-            auto ret = AddRelocations(pre_buffer);
-            if (pre_buffer) {
-                WriteCntpctHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c_pre);
-            } else {
-                WriteCntpctHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c);
-            }
-            continue;
-        }
-
-        // MRS Xn, CNTFRQ_EL0
-        if (auto mrs = MRS{inst}; mrs.Verify() && mrs.GetSystemReg() == CntfrqEl0) {
-            bool pre_buffer = false;
-            auto ret = AddRelocations(pre_buffer);
-            if (pre_buffer) {
-                WriteCntfrqHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c_pre);
-            } else {
-                WriteCntfrqHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c);
-            }
-            continue;
-        }
-
-        // MSR TPIDR_EL0, Xn
-        if (auto msr = MSR{inst}; msr.Verify() && msr.GetSystemReg() == TpidrEl0) {
-            bool pre_buffer = false;
-            auto ret = AddRelocations(pre_buffer);
-             if (pre_buffer) {
-                WriteMsrHandler(ret, oaknut::XReg{static_cast<int>(msr.GetRt())}, c_pre);
-            } else {
-                WriteMsrHandler(ret, oaknut::XReg{static_cast<int>(msr.GetRt())}, c);
-            }
+        // SVC, MRS Xn, TPIDR_EL0/TPIDRRO_EL0/CNTPCT_EL0/CNTFRQ_EL0, MSR TPIDR_EL0, Xn
+        if (IsPatchSite(inst)) {
+            sites.push_back({i, inst});
             continue;
         }
 
@@ -274,6 +264,14 @@ bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet
 
         if (const auto pac = RewritePointerAuth(inst)) {
             curr_patch->m_pac_rewrites.emplace_back(i, *pac);
+        }
+    }
+
+    if (use_split) {
+        EmitSplit(sites, image_size);
+    } else {
+        for (const PatchSite& site : sites) {
+            EmitSite(site, false);
         }
     }
 
@@ -288,6 +286,170 @@ bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet
         this->mode = PatchMode::Split;
     } else {
         this->mode = image_size > MaxRelativeBranch ? PatchMode::PreText : PatchMode::PostData;
+    }
+    return true;
+}
+
+void Patcher::EmitSite(const PatchSite& site, bool pre) {
+    const uintptr_t this_offset = site.index * sizeof(u32);
+    // Relocate from patch to next instruction.
+    const uintptr_t ret = this_offset + sizeof(u32);
+    auto& cg = pre ? c_pre : c;
+
+    // Relocate to pre- or post-patch
+    if (pre) {
+        this->BranchToPatchPre(this_offset);
+    } else {
+        this->BranchToPatch(this_offset);
+    }
+
+    if (auto svc = SVC{site.inst}; svc.Verify()) {
+        if (pre) {
+            WriteSvcTrampoline(ret, svc.GetValue(), c_pre, m_save_context_pre, m_load_context_pre);
+        } else {
+            WriteSvcTrampoline(ret, svc.GetValue(), c, m_save_context, m_load_context);
+        }
+    } else if (auto mrs = MRS{site.inst}; mrs.Verify()) {
+        const auto dest_reg = oaknut::XReg{static_cast<int>(mrs.GetRt())};
+        switch (mrs.GetSystemReg()) {
+        case TpidrroEl0:
+            WriteMrsHandler(ret, dest_reg, oaknut::SystemReg::TPIDRRO_EL0, cg);
+            break;
+        case TpidrEl0:
+            WriteMrsHandler(ret, dest_reg, oaknut::SystemReg::TPIDR_EL0, cg);
+            break;
+        case CntpctEl0:
+            WriteCntpctHandler(ret, dest_reg, cg);
+            break;
+        default:
+            WriteCntfrqHandler(ret, dest_reg, cg);
+            break;
+        }
+    } else {
+        WriteMsrHandler(ret, oaknut::XReg{static_cast<int>(MSR{site.inst}.GetRt())}, cg);
+    }
+}
+
+// A branch reaches 128 MiB, less than such a module is long, so it has a patch section before
+// its text and one after its data. Patch code follows the order of the instructions in both. An
+// instruction that reaches neither section is left to trap: with 180 MiB of code in a 270 MiB
+// module those are the ones between 128 MiB and 142 MiB.
+void Patcher::EmitSplit(std::span<const PatchSite> sites, size_t image_size) {
+    // The branch back lies inside the patch code, up to two instructions from where the rules
+    // below measure.
+    constexpr ptrdiff_t Reach = static_cast<ptrdiff_t>(MaxRelativeBranch - 2 * sizeof(u32));
+    const auto offset_of = [](const PatchSite& site) {
+        return static_cast<ptrdiff_t>(site.index * sizeof(u32));
+    };
+    const auto drop_from = [](auto& list, ptrdiff_t cut) {
+        std::erase_if(list, [cut](const auto& rel) { return rel.patch_offset >= cut; });
+    };
+
+    // Before the text: an instruction is as far from its patch code as it is into the text,
+    // plus the patch code of the instructions after it.
+    std::vector<ptrdiff_t> starts;
+    size_t pre_count = 0;
+    while (pre_count < sites.size() &&
+           offset_of(sites[pre_count]) < static_cast<ptrdiff_t>(MaxRelativeBranch)) {
+        starts.push_back(c_pre.offset());
+        EmitSite(sites[pre_count++], true);
+    }
+    starts.push_back(c_pre.offset());
+
+    size_t fits = 0;
+    ptrdiff_t farthest = std::numeric_limits<ptrdiff_t>::min();
+    for (size_t n = 1; n <= pre_count; n++) {
+        farthest = std::max(farthest, offset_of(sites[n - 1]) - starts[n - 1]);
+        const auto section = static_cast<ptrdiff_t>(
+            Common::AlignUp(static_cast<size_t>(starts[n]), Core::Memory::YUZU_PAGESIZE));
+        if (farthest + section > Reach) {
+            break;
+        }
+        fits = n;
+    }
+    if (fits < pre_count) {
+        const ptrdiff_t cut = starts[fits];
+        m_patch_instructions_pre.resize(static_cast<size_t>(cut) / sizeof(u32));
+        drop_from(curr_patch->m_branch_to_pre_patch_relocations, cut);
+        drop_from(curr_patch->m_branch_to_module_relocations_pre, cut);
+        drop_from(curr_patch->m_write_module_pc_relocations_pre, cut);
+        drop_from(curr_patch->m_trampolines_pre, cut);
+    }
+
+    // After the data: an instruction is as far from the end of its patch code as the rest of
+    // the module is long, plus the patch code up to there.
+    const ptrdiff_t base = c.offset();
+    std::vector<ptrdiff_t> ends;
+    const auto emit_from = [&](size_t first) {
+        ends.clear();
+        for (size_t k = first; k < sites.size(); k++) {
+            EmitSite(sites[k], false);
+            ends.push_back(c.offset());
+        }
+    };
+    emit_from(fits);
+
+    const size_t rest = sites.size() - fits;
+    std::vector<ptrdiff_t> farthest_after(rest + 1, std::numeric_limits<ptrdiff_t>::min());
+    for (size_t i = rest; i-- > 0;) {
+        farthest_after[i] =
+            std::max(farthest_after[i + 1], ends[i] - offset_of(sites[fits + i]));
+    }
+    // Leaving the first of them out brings the patch code of the others closer.
+    size_t trapped = 0;
+    while (trapped < rest) {
+        const ptrdiff_t saved = (trapped == 0 ? base : ends[trapped - 1]) - base;
+        if (static_cast<ptrdiff_t>(image_size) + farthest_after[trapped] - saved <= Reach) {
+            break;
+        }
+        trapped++;
+    }
+    if (trapped != 0) {
+        m_patch_instructions.resize(static_cast<size_t>(base) / sizeof(u32));
+        drop_from(curr_patch->m_branch_to_patch_relocations, base);
+        drop_from(curr_patch->m_branch_to_module_relocations, base);
+        drop_from(curr_patch->m_write_module_pc_relocations, base);
+        drop_from(curr_patch->m_trampolines, base);
+        emit_from(fits + trapped);
+        for (size_t k = fits; k < fits + trapped; k++) {
+            curr_patch->m_traps.emplace_back(offset_of(sites[k]), sites[k].inst);
+        }
+    }
+
+    LOG_INFO(Core_ARM,
+             "NCE: module of {:#x} bytes: {} patched instructions use the section before the "
+             "text, {} the one after the data, {} trap",
+             image_size, fits, rest - trapped, trapped);
+}
+
+bool Patcher::CanRelocate() const {
+    BranchLayout layout{mode, static_cast<ptrdiff_t>(GetSectionSize()),
+                        static_cast<ptrdiff_t>(GetPreSectionSize()), 0,
+                        static_cast<ptrdiff_t>(total_program_size)};
+    const auto to_patch = [&](const Relocation& rel) {
+        return InBranchRange(layout.ToPatch(rel.patch_offset, rel.module_offset));
+    };
+    const auto from_patch = [&](const Relocation& rel) {
+        return InBranchRange(layout.FromPatch(rel.patch_offset, rel.module_offset));
+    };
+    const auto to_pre_patch = [&](const Relocation& rel) {
+        return InBranchRange(layout.ToPrePatch(rel.patch_offset, rel.module_offset));
+    };
+    const auto from_pre_patch = [&](const Relocation& rel) {
+        return InBranchRange(layout.FromPrePatch(rel.patch_offset, rel.module_offset));
+    };
+    for (const ModulePatch& patch : modules) {
+        layout.image_size = static_cast<ptrdiff_t>(patch.m_image_size);
+        if (!std::ranges::all_of(patch.m_branch_to_patch_relocations, to_patch) ||
+            !std::ranges::all_of(patch.m_branch_to_module_relocations, from_patch)) {
+            return false;
+        }
+        if (mode == PatchMode::Split &&
+            (!std::ranges::all_of(patch.m_branch_to_pre_patch_relocations, to_pre_patch) ||
+             !std::ranges::all_of(patch.m_branch_to_module_relocations_pre, from_pre_patch))) {
+            return false;
+        }
+        layout.total_size -= layout.image_size;
     }
     return true;
 }
@@ -317,7 +479,7 @@ std::span<const u32> Patcher::RelocateRuntimeTls(
     return m_patch_instructions;
 }
 
-bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, EntryTrampolines* out_trampolines) {
+bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, EntryTrampolines* out_trampolines, TrappedInstructions* out_traps) {
     const size_t patch_size = GetSectionSize();
     const size_t pre_patch_size = GetPreSectionSize();
 
@@ -328,42 +490,30 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::Co
     const auto text_words =
         std::span<u32>{reinterpret_cast<u32*>(text.data()), text.size() / sizeof(u32)};
 
+    // CanRelocate checks these same branches.
+    const BranchLayout layout{mode, static_cast<ptrdiff_t>(patch_size),
+                              static_cast<ptrdiff_t>(pre_patch_size),
+                              static_cast<ptrdiff_t>(image_size),
+                              static_cast<ptrdiff_t>(total_program_size)};
+
     const auto ApplyBranchToPatchRelocation = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        if (mode == PatchMode::PreText) {
-            rc.B(rel.patch_offset - patch_size - rel.module_offset);
-        } else {
-            rc.B(total_program_size - rel.module_offset + rel.patch_offset);
-        }
+        rc.B(layout.ToPatch(rel.patch_offset, rel.module_offset));
     };
 
     const auto ApplyBranchToPatchRelocationPre = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        rc.B(static_cast<ptrdiff_t>(rel.patch_offset) - static_cast<ptrdiff_t>(pre_patch_size) - static_cast<ptrdiff_t>(rel.module_offset));
-    };
-
-    const auto ApplyBranchToPatchRelocationPostSplit = [&](u32* target, const Relocation& rel) {
-        oaknut::CodeGenerator rc{target};
-        rc.B(static_cast<ptrdiff_t>(image_size) + static_cast<ptrdiff_t>(rel.patch_offset) - static_cast<ptrdiff_t>(rel.module_offset));
+        rc.B(layout.ToPrePatch(rel.patch_offset, rel.module_offset));
     };
 
     const auto ApplyBranchToModuleRelocation = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        if (mode == PatchMode::PreText) {
-            rc.B(patch_size - rel.patch_offset + rel.module_offset);
-        } else {
-            rc.B(rel.module_offset - total_program_size - rel.patch_offset);
-        }
+        rc.B(layout.FromPatch(rel.patch_offset, rel.module_offset));
     };
 
     const auto ApplyBranchToModuleRelocationPre = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        rc.B(static_cast<ptrdiff_t>(pre_patch_size) + static_cast<ptrdiff_t>(rel.module_offset) - static_cast<ptrdiff_t>(rel.patch_offset));
-    };
-
-     const auto ApplyBranchToModuleRelocationPostSplit = [&](u32* target, const Relocation& rel) {
-        oaknut::CodeGenerator rc{target};
-        rc.B(static_cast<ptrdiff_t>(rel.module_offset) - static_cast<ptrdiff_t>(image_size) - static_cast<ptrdiff_t>(rel.patch_offset));
+        rc.B(layout.FromPrePatch(rel.patch_offset, rel.module_offset));
     };
 
     const auto RebasePatch = [&](ptrdiff_t patch_offset) {
@@ -395,7 +545,7 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::Co
         LOG_DEBUG(Core_ARM, "applied Pre: {}", patch.m_branch_to_pre_patch_relocations.size());
 
         for (const Relocation& rel : patch.m_branch_to_patch_relocations) {
-            ApplyBranchToPatchRelocationPostSplit(text_words.data() + rel.module_offset / sizeof(u32), rel);
+            ApplyBranchToPatchRelocation(text_words.data() + rel.module_offset / sizeof(u32), rel);
         }
         LOG_DEBUG(Core_ARM, "applied Post: {}", patch.m_branch_to_patch_relocations.size());
 
@@ -405,7 +555,7 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::Co
         LOG_DEBUG(Core_ARM, "aplied Pre-module {}", patch.m_branch_to_module_relocations_pre.size());
 
         for (const Relocation& rel : patch.m_branch_to_module_relocations) {
-            ApplyBranchToModuleRelocationPostSplit(m_patch_instructions.data() + rel.patch_offset / sizeof(u32), rel);
+            ApplyBranchToModuleRelocation(m_patch_instructions.data() + rel.patch_offset / sizeof(u32), rel);
         }
         LOG_DEBUG(Core_ARM, "applied Post-module {}", patch.m_branch_to_module_relocations.size());
 
@@ -469,6 +619,13 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::Co
 
     for (const auto& [i, word] : patch.m_pac_rewrites) {
         text_words[i] = word;
+    }
+
+    for (const auto& [module_offset, inst] : patch.m_traps) {
+        text_words[module_offset / sizeof(u32)] = TrapInstruction;
+        if (out_traps) {
+            out_traps->insert({RebasePc(module_offset), inst});
+        }
     }
 
     // Remove the patched module size from the total. This is done so total_program_size

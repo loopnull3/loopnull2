@@ -10,10 +10,12 @@
 #include <memory>
 #include <optional>
 
+#include "common/cpu_features.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/signal_chain.h"
 #include "core/arm/nce/arm_nce.h"
+#include "core/arm/nce/instructions.h"
 #include "core/arm/nce/interpreter_visitor.h"
 #include "core/arm/nce/patcher.h"
 #include "core/core.h"
@@ -319,8 +321,63 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
     return HandleFailedGuestFault(guest_ctx, raw_info, raw_context);
 }
 
+// A patched instruction of a module too large for a branch to its patch code
+// (Patcher::EmitSplit): does what that code does.
+bool ArmNce::HandleTrappedInstruction(GuestContext* guest_ctx, u32 inst, void* raw_context) {
+    auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
+    auto& thread_params = guest_ctx->parent->m_running_thread->GetNativeExecutionParameters();
+    host_ctx.pc += 4;
+
+    static std::atomic<u64> trapped{};
+    if (const u64 count = trapped.fetch_add(1, std::memory_order_relaxed) + 1;
+        count == 1 || (count & 0x3ffff) == 0) {
+        LOG_INFO(Core_ARM, "NCE: {} patched instructions run by trap", count);
+    }
+
+    if (auto svc = NCE::SVC{inst}; svc.Verify()) {
+        // Leave guest code with the call pending; the context is locked as when a fault halts
+        // the thread (HandleFailedGuestFault).
+        guest_ctx->svc = svc.GetValue();
+        guest_ctx->esr_el1.fetch_or(static_cast<u64>(HaltReason::SupervisorCall));
+        thread_params.lock.store(SpinLockLocked);
+        SaveGuestContext(guest_ctx, raw_context);
+        return false;
+    }
+
+    if (auto mrs = NCE::MRS{inst}; mrs.Verify()) {
+        u64 value{};
+        switch (mrs.GetSystemReg()) {
+        case NCE::TpidrEl0:
+            value = thread_params.tpidr_el0;
+            break;
+        case NCE::TpidrroEl0:
+            value = thread_params.tpidrro_el0;
+            break;
+        case NCE::CntpctEl0:
+            value = static_cast<u64>(Common::g_wall_clock.GetCNTPCT());
+            break;
+        default:
+            value = Common::g_wall_clock.GetGuestCNTFRQ();
+            break;
+        }
+        if (mrs.GetRt() != 31) {
+            host_ctx.regs[mrs.GetRt()] = value;
+        }
+    } else {
+        const u32 rt = NCE::MSR{inst}.GetRt();
+        thread_params.tpidr_el0 = rt != 31 ? host_ctx.regs[rt] : 0;
+    }
+    return true;
+}
+
 bool ArmNce::HandleGuestIllegalInstruction(GuestContext* guest_ctx, void* raw_info,
                                            void* raw_context) {
+    const auto& traps = guest_ctx->parent->m_running_thread->GetOwnerProcess()->GetNceTraps();
+    if (const auto it = traps.find(static_cast<ucontext_t*>(raw_context)->uc_mcontext.pc);
+        it != traps.end()) {
+        return HandleTrappedInstruction(guest_ctx, it->second, raw_context);
+    }
+
     // knob2 (debug_knobs bit 2, value 4): skip undefined instructions in guest code instead of
     // halting the thread, like Dynarmic, which logs them and carries on.
     if (Settings::GetDebugKnobAt(2)) {

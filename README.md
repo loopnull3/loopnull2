@@ -260,8 +260,9 @@ at start, `Firmware files:` lines at an install).
 
 Include your phone model, Android version and GPU driver, the game, the engine, the LoopNative
 report, and `Android/data/dev.loopnull.loopnative/files/log/eden_log.txt` (its `LoopNative:`
-lines show what LoopNative did). Check logs for personal information before sharing. Never share
-games, keys, firmware or account data.
+lines show what LoopNative did). When the app closed by itself, the last lines say where: an
+exception nothing caught leaves a `Host crash:` line. Check logs for personal information before
+sharing. Never share games, keys, firmware or account data.
 
 ### Diagnostic switches
 

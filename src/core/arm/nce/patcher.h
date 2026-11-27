@@ -47,6 +47,9 @@ enum class PatchMode : u32 {
 using ModuleTextAddress = u64;
 using PatchTextAddress = u64;
 using EntryTrampolines = ::Common::unordered_map<ModuleTextAddress, PatchTextAddress>;
+/// Patched instructions out of reach of their patch code, by address: they trap and run in the
+/// signal handler.
+using TrappedInstructions = ::Common::unordered_map<ModuleTextAddress, u32>;
 
 struct InstructionPatch {
     u64 offset;
@@ -62,7 +65,10 @@ public:
     explicit Patcher(std::span<const u8> text);
     ~Patcher();
     bool PatchText(std::span<const u8> program_image, const Kernel::CodeSet::Segment& code);
-    bool RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, EntryTrampolines* out_trampolines);
+    bool RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, EntryTrampolines* out_trampolines, TrappedInstructions* out_traps = nullptr);
+    /// Whether every branch RelocateAndCopy will write is in range. Call it once all modules are
+    /// patched; when it is false the program cannot run under NCE.
+    [[nodiscard]] bool CanRelocate() const;
     std::span<const u32> RelocateRuntimeTls(s64 patch_offset, std::vector<InstructionPatch>& out_patches);
     size_t GetSectionSize() const noexcept;
     size_t GetPreSectionSize() const noexcept;
@@ -78,6 +84,12 @@ private:
         ptrdiff_t patch_offset;
         uintptr_t module_offset;
     };
+    struct PatchSite {
+        u32 index; ///< Word of the text section.
+        u32 inst;  ///< The instruction there.
+    };
+    void EmitSite(const PatchSite& site, bool pre);
+    void EmitSplit(std::span<const PatchSite> sites, size_t image_size);
 
     // Core implementations with explicit code generator
     void WriteLoadContext(oaknut::VectorCodeGenerator& code);
@@ -154,6 +166,9 @@ private:
         std::vector<ModuleTextAddress> m_exclusives{};
         // In-place rewrites of pointer-authentication instructions (index, replacement word).
         std::vector<std::pair<ModuleTextAddress, u32>> m_pac_rewrites{};
+        // Patched instructions no patch section reaches (module offset, instruction).
+        std::vector<std::pair<uintptr_t, u32>> m_traps{};
+        size_t m_image_size{};
     };
 
     oaknut::VectorCodeGenerator c;

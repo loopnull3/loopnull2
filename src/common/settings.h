@@ -1111,6 +1111,8 @@ bool IsGPUFenceBehaviorAccurate();
 
 bool IsFastmemEnabled();
 void SetNceEnabled(bool is_64bit);
+/// For a program NCE cannot patch: it runs on Dynarmic.
+void DisableNce();
 bool IsNceEnabled();
 
 void SetCurrentProgramID(u64 program_id);

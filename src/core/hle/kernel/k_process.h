@@ -80,6 +80,7 @@ private:
     std::map<KProcessAddress, u64> m_debug_page_refcounts{};
 #ifdef HAS_NCE
     ::Common::unordered_map<u64, u64> m_post_handlers{};
+    ::Common::unordered_map<u64, u32> m_nce_traps{};
 #endif
     std::unique_ptr<Core::ExclusiveMonitor> m_exclusive_monitor;
     Core::Memory::Memory m_memory;
@@ -511,6 +512,11 @@ public:
 #ifdef HAS_NCE
     ::Common::unordered_map<u64, u64>& GetPostHandlers() noexcept {
         return m_post_handlers;
+    }
+
+    /// Patched instructions that trap instead of branching to patch code, by address.
+    ::Common::unordered_map<u64, u32>& GetNceTraps() noexcept {
+        return m_nce_traps;
     }
 #endif
 

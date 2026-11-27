@@ -272,7 +272,8 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         // Relocate code patch and copy to the program image.
         // Save size before RelocateAndCopy (which may resize)
         const size_t size_before_relocate = codeset.memory.size();
-        if (patch->RelocateAndCopy(load_base, code, codeset.memory, &process.GetPostHandlers())) {
+        if (patch->RelocateAndCopy(load_base, code, codeset.memory, &process.GetPostHandlers(),
+                                   &process.GetNceTraps())) {
             // Update patch section.
             auto& patch_segment = codeset.PatchSegment();
             auto& post_patch_segment = codeset.PostPatchSegment();

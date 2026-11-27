@@ -9,7 +9,9 @@
 
 #include <codecvt>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <locale>
 #include <map>
 #include <set>
@@ -260,6 +262,22 @@ void EmulationSession::InitializeSystem(bool reload) {
         Common::Log::Initialize();
         Common::Log::SetColorConsoleBackendEnabled(true);
         Common::Log::Start();
+
+        // An uncaught exception closes the app. Name it first: a Critical line is written to the
+        // log file at once, with the lines before it.
+        std::set_terminate([] {
+            try {
+                if (const auto pending = std::current_exception()) {
+                    std::rethrow_exception(pending);
+                }
+                LOG_CRITICAL(Frontend, "Host crash: std::terminate without an exception");
+            } catch (const std::exception& e) {
+                LOG_CRITICAL(Frontend, "Host crash: uncaught exception: {}", e.what());
+            } catch (...) {
+                LOG_CRITICAL(Frontend, "Host crash: uncaught exception of an unknown type");
+            }
+            std::abort();
+        });
 
         m_input_subsystem.Initialize();
     }

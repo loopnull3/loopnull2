@@ -63,6 +63,18 @@ struct PatchCollection {
         return total_size;
     }
 
+    /// Whether the patchers can write every branch of the layout they were given.
+    bool CanRelocate() const {
+#ifdef HAS_NCE
+        for (const auto& patcher : patchers) {
+            if (!patcher.CanRelocate()) {
+                return false;
+            }
+        }
+#endif
+        return true;
+    }
+
     void SaveIndex(size_t module) {
         module_patcher_indices[module] = static_cast<s32>(patchers.size() - 1);
     }
@@ -456,7 +468,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
     std::size_t code_size{};
 
     // Define an nce patch context for each potential module.
-    PatchCollection patch_ctx{is_application};
+    std::optional<PatchCollection> patch_ctx;
 
     // The layout pass must see the code as patched: NCE rewrites the SVCs and MRS reads it finds
     // here, so a patch adding one (Dark's Dynamic FPS for Ocarina of Time reads CNTPCT_EL0)
@@ -465,23 +477,41 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
                                    system.GetContentProvider()};
 
     // Use the NSO module loader to figure out the code layout
-    for (size_t i = 0; i < static_modules.size(); i++) {
-        const auto& module = static_modules[i];
-        const FileSys::VirtualFile module_file{dir->GetFile(module)};
-        if (!module_file) {
-            continue;
-        }
+    const auto compute_layout = [&] {
+        patch_ctx.emplace(is_application);
+        code_size = 0;
+        for (size_t i = 0; i < static_modules.size(); i++) {
+            const auto& module = static_modules[i];
+            const FileSys::VirtualFile module_file{dir->GetFile(module)};
+            if (!module_file) {
+                continue;
+            }
 
-        const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
-        const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
-            process, system, *module_file, code_size, should_pass_arguments, false, pm,
-            patch_ctx.GetPatchers(), patch_ctx.GetLastIndex());
-        if (!tentative_next_load_addr) {
+            const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
+            const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
+                process, system, *module_file, code_size, should_pass_arguments, false, pm,
+                patch_ctx->GetPatchers(), patch_ctx->GetLastIndex());
+            if (!tentative_next_load_addr) {
+                return false;
+            }
+
+            patch_ctx->SaveIndex(i);
+            code_size = *tentative_next_load_addr;
+        }
+        return true;
+    };
+    if (!compute_layout()) {
+        return {ResultStatus::ErrorLoadingNSO, {}};
+    }
+    // Writing a branch that is out of range would end the process, so such a program is laid
+    // out again for Dynarmic.
+    if (!patch_ctx->CanRelocate()) {
+        LOG_WARNING(Loader, "NCE cannot reach its patch code from every module of this program, "
+                            "running it on Dynarmic");
+        Settings::DisableNce();
+        if (!compute_layout()) {
             return {ResultStatus::ErrorLoadingNSO, {}};
         }
-
-        patch_ctx.SaveIndex(i);
-        code_size = *tentative_next_load_addr;
     }
 
     // Enable direct memory mapping in case of NCE.
@@ -495,7 +525,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
     }();
 
     // Add patch size to the total module size
-    code_size += patch_ctx.GetTotalPatchSize();
+    code_size += patch_ctx->GetTotalPatchSize();
 
     // TODO: this is bad form of ASLR, it sucks
     std::uintptr_t aslr_offset = ((::Settings::values.rng_seed_enabled.GetValue()
@@ -521,7 +551,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
         const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
         const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
             process, system, *module_file, load_addr, should_pass_arguments, true, pm,
-            patch_ctx.GetPatchers(), patch_ctx.GetIndex(i));
+            patch_ctx->GetPatchers(), patch_ctx->GetIndex(i));
         if (!tentative_next_load_addr) {
             return {ResultStatus::ErrorLoadingNSO, {}};
         }

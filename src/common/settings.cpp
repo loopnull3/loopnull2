@@ -214,6 +214,10 @@ void SetNceEnabled(bool is_39bit) {
     is_nce_enabled = IsFastmemEnabled() && is_nce_selected && is_39bit;
 }
 
+void DisableNce() {
+    is_nce_enabled = false;
+}
+
 bool IsNceEnabled() {
     return is_nce_enabled;
 }
