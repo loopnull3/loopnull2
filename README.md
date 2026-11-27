@@ -110,14 +110,16 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
     and every legal LDR block tried right;
   - the game's uploads hold none but all-zero blocks, which are taken out, and the terrain
     arrays and every texture copied into them hold none when read back;
-  - in the game's own textures the phone samples whole small levels as that error colour while
-    a copy out of the same level returns the valid blocks written into it: 115 of 684 sampled
-    levels in one run (level 5 of a 1024x384 and of a 256x384 array, level 6 of 746x746
-    textures). All 115 are levels RADV writes through addrlib's non-block-compressed view, by
-    this rule: with the first level's block count aligned up to 16 as the padding, a level is
-    one when for its width or height `max(min(max(blocks << level, first), padding) >> level,
-    1)` is less than its block count. The rule names 34 more levels that sample right. A
-    texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
+  - in the game's own textures the phone samples whole small levels wrong while a copy out of
+    the same level returns the valid blocks written into it: 124 of 684 sampled levels in one
+    run, in 117 of 218 textures (level 5 of a 1024x384 and of a 256x384 array, level 6 of
+    746x746 textures); 95 of them wholly as that error colour, the others partly or as other
+    content. All 124 are named by RADV's own test for writing a level through addrlib's
+    non-block-compressed view, with the first level's block count aligned up to 16 taken as its
+    padding: a level is one when for its width or height `max(min(max(blocks << level, first),
+    padding) >> level, 1)` is less than its block count. The rule names 34 more levels that
+    sample right (textures from 1024x768 up among them, whose padding may be wider). A texture
+    of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
   - the audit's own test textures (`mip check`) all come back right: none is of a size that
     reaches that view;
   - the game copies texture to texture only, and fills every layer of a terrain array, at
