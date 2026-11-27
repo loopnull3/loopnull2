@@ -122,8 +122,10 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
     few where that view is right (level 5 of a 51x819 texture, whose level 6 is wrong). A
     texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
   - the audit's own test textures (`mip check`) all came back right: none was of a size that
-    reaches that view. It now has three of the game's sizes: 256x384 ASTC, the same block
-    counts as BC3 (no error colour there: such a level would be black), and 1024x768;
+    reaches that view. It now has three of the game's sizes (256x384, 1024x768 and 51x819
+    ASTC 8x8) and the first one's block counts as BC3, ASTC 4x4 and ASTC 6x6. Mesa asks
+    addrlib for that view of every 16-byte block as BC3's, which has 4x4 texels a block: a
+    reading of Mesa's source, which the three formats put to the test on the phone;
   - the game copies texture to texture only, and fills every layer of a terrain array, at
     every level, from one texture (serial 130 or 132) before the tiles' own textures follow.
 
