@@ -120,8 +120,9 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
     padding) >> level, 1)` is less than its block count. The rule names 34 more levels that
     sample right (textures from 1024x768 up among them, whose padding may be wider). A texture
     of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
-  - the audit's own test textures (`mip check`) all come back right: none is of a size that
-    reaches that view;
+  - the audit's own test textures (`mip check`) all came back right: none was of a size that
+    reaches that view. It now has three of the game's sizes: 256x384 ASTC, the same block
+    counts as BC3 (no error colour there: such a level would be black), and 1024x768;
   - the game copies texture to texture only, and fills every layer of a terrain array, at
     every level, from one texture (serial 130 or 132) before the tiles' own textures follow.
 
@@ -133,13 +134,17 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   out: soft textures, dense images for the sparse ASTC arrays, cleaning buffer copies (the game
   makes none), illegal void extents (the game has none), and a CPU copy for levels of sizes
   that are no power of two (never run).
-- **Mario Kart World, light-blue pillars and spikes into the sky (open):** on an S26 they stand
-  where there is no water, and go when mesh draws are skipped (`DM_VK_MESH_EMU=0`); the game's
-  mesh programs there are its water (fluid simulation) and its trails. Candidate under test
-  (`native_patches/0005-sparse-gpu-fresh-tiles.patch`, `DM_VK_SPARSE_GPU_ZERO=1` in Diagnostic
-  switches): the game's sparse terrain render targets get memory tile by tile, and a tile that
-  gets memory after the texture's first use started with what that memory last held (Banana
-  Native lists it as open); with the switch it starts as zeros.
+- **Mario Kart World, light-blue pillars and spikes into the sky (a fix under test):** on an S26
+  they stand where there is no water, and go when mesh draws are skipped (`DM_VK_MESH_EMU=0`);
+  the game's mesh programs there are its water (a fluid simulation, river cascades) and its
+  trails. The likely cause, not proven: the game's sparse render targets (8192x8192 RG16 and
+  16384x16384 R8) get memory tile by tile, and a tile that got memory after the texture's first
+  use started with what that memory last held (Banana Native lists it as open). Tile memory is
+  shared by every sparse image, so that can be the bytes of an ASTC array's tile read as
+  heights (a driver without sparse residency for those formats gets whole images, which have
+  no such tiles). Such a tile now starts as zeros, which is what it read before it had memory
+  (`native_patches/0005-sparse-gpu-fresh-tiles.patch`; `DM_VK_SPARSE_GPU_ZERO=0` in Diagnostic
+  switches turns it off). It ran on the phone in the title scene only, where no pillar shows.
 - Shaders built with older shader tools are dropped once, so the game builds them again.
 - Not included, as on that branch: the shader passes that read exact pink as 0. They also turned
   valid data black (dark patches on desert ground, black spreading on the title screen).

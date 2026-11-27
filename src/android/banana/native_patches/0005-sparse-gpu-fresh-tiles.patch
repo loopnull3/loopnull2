@@ -1,13 +1,15 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 33f528b2..975e0120 100644
+index 20359eb8..3e47e324 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -1295,6 +1295,18 @@ static void copy_bound(vka_img *im, VkCommandBuffer cb, const vka_span *s, uint3
+@@ -1295,6 +1295,20 @@ static void copy_bound(vka_img *im, VkCommandBuffer cb, const vka_span *s, uint3
      }
      if (n) vk.vkCmdCopyBufferToImage(cb, s->buf, im->img, VK_IMAGE_LAYOUT_GENERAL, n, rg);
  }
-+// DM_VK_SPARSE_GPU_ZERO=1 (an experiment, Hokkaido): a GPU-written sparse texture's tile bound after its first use starts as zeros, as a page the game cleared or never
-+// wrote reads on the Switch, instead of with what its memory slot last held (sparse_bind's open point: the content of whichever tile had the slot before)
++// A GPU-written sparse texture's tile bound after its first use starts as zeros (Hokkaido): what the tile read while it had no memory, and what the tiles bound at the
++// first use hold after its clear. Before, it started with what its memory slot last held (sparse_bind's open point), and tile slots are shared by every sparse image
++// (vka_sparse.c): the bytes of another texture's tile, an ASTC array's among them, read as this one's texels. Under test for Mario Kart World's light-blue pillars on
++// RADV, where its 8192x8192 RG16 and 16384x16384 R8 render targets are such images. DM_VK_SPARSE_GPU_ZERO=0: as before
 +static uint32_t g_tzn;   // tiles zeroed by the bind in progress
 +static void tile_zero(vka_img *im, VkCommandBuffer cb, uint32_t i, uint32_t ly, uint32_t tx, uint32_t ty, uint32_t w, uint32_t h) {
 +    const vka_fmt *f = &im->f; uint32_t px0 = tx * im->rs_tw, py0 = ty * im->rs_th;
@@ -21,29 +23,29 @@ index 33f528b2..975e0120 100644
  // Levels and layers of a sparse texture's image whose pages or mappings changed since (gen, stamp), or all of them, gathered from the page table and deswizzled by bands:
  // a band is one row of GOB blocks (8 << block height block rows), which is one range of the storage. Bands with nothing mapped are zero texels from the zero buffer, bands that
  // did not change (all = 0) are left alone, and runs of mapped bands go through scratch memory of at most 16 MiB a run, gathered from the page table (unmapped pages of a
-@@ -1333,7 +1345,10 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
+@@ -1333,7 +1347,10 @@ static void upload_sparse_parts(vka_img *im, VkCommandBuffer cb, uint64_t gen, u
                  int b2 = 0;
                  if (BAND_CHANGED(k)) for (uint32_t tx = 0; tx < rs_ntx(im, i); tx++) {
                      uint64_t po = off + BAND_OFF(k) + (uint64_t)tx * 0x10000;
 -                    b2 |= vks_tile(im->rs, i, ly, tx, k, po < off + len && nvn_sparse_any(im->vpool, mem + po, 0x10000));
-+                    int fresh = bind_only && !all && VKA_ENV("DM_VK_SPARSE_GPU_ZERO", 0) > 0 && !vks_tile_bound(im->rs, i, ly, tx, k);   // (the experiment: a tile bound now)
++                    int fresh = bind_only && !all && VKA_ENV("DM_VK_SPARSE_GPU_ZERO", 1) > 0 && !vks_tile_bound(im->rs, i, ly, tx, k);   // (a tile bound now)
 +                    int on = vks_tile(im->rs, i, ly, tx, k, po < off + len && nvn_sparse_any(im->vpool, mem + po, 0x10000));
 +                    b2 |= on;
 +                    if (fresh && on) tile_zero(im, cb, i, ly, tx, k, w, h);
                  }
                  bst[k] = b2 ? 2 : 0;
              }
-@@ -1391,7 +1406,16 @@ static void upload_sparse(vka_img *im, VkCommandBuffer cb, int all) {   // gener
+@@ -1391,7 +1408,16 @@ static void upload_sparse(vka_img *im, VkCommandBuffer cb, int all) {   // gener
  static void sparse_bind(vka_img *im, VkCommandBuffer cb, int all) {
      uint64_t gen = im->vgen, stamp = im->stamp;
      im->vgen = nvn_sparse_gen(); im->stamp = nvn_dirty_now();
 +    g_tzn = 0;
      upload_sparse_parts(im, cb, gen, stamp, all, 1);
-+    if (g_tzn) {   // (DM_VK_SPARSE_GPU_ZERO: the zeros before the game's writes into those tiles)
++    if (g_tzn) {   // (the zeros before the game's writes into those tiles)
 +        vka_barrier(cb);
 +        static _Atomic uint64_t tot; uint64_t t0 = atomic_fetch_add(&tot, g_tzn), t1 = t0 + g_tzn;
 +        if (!t0 || 63 - __builtin_clzll(t1) != 63 - __builtin_clzll(t0))
-+            VLOG("sparse GPU-written texture serial %llu %ux%u format %#x: %u tiles bound after its first use start as zeros (%llu so far, DM_VK_SPARSE_GPU_ZERO)", (unsigned long long)im->serial, im->w, im->h,
++            VLOG("sparse GPU-written texture serial %llu %ux%u format %#x: %u tiles bound after its first use start as zeros (%llu so far; DM_VK_SPARSE_GPU_ZERO=0: with what their memory last held)", (unsigned long long)im->serial, im->w, im->h,
 +                 im->d.format, g_tzn, (unsigned long long)t1);
 +        g_tzn = 0;
 +    }

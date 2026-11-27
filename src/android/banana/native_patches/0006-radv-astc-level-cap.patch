@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 975e0120..b6b5e938 100644
+index 3e47e324..8fdad6cc 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -2851,6 +2851,20 @@ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int stor
+@@ -2854,6 +2854,20 @@ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int stor
      if (l0 >= im->levels || a0 >= im->layers) return VK_NULL_HANDLE;
      if (l0 + nl > im->levels) nl = im->levels - l0;
      if (a0 + na > im->layers) na = im->layers - a0;

@@ -1,8 +1,8 @@
 diff --git a/dm/gfx/vk_android/vka.h b/dm/gfx/vk_android/vka.h
-index de7b3026..d286214c 100644
+index de7b3026..2698be05 100644
 --- a/dm/gfx/vk_android/vka.h
 +++ b/dm/gfx/vk_android/vka.h
-@@ -373,6 +373,14 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
+@@ -373,6 +373,15 @@ void vka_lrz_touch(VkCommandBuffer cb, vka_img *cur, int loads);   // Adreno LRZ
  // Before a copy out of im, or into its texture level dst_level (-1: a copy out of it): a soft texture (vka_soft.h) the game copies from, or into at its finest level, is made
  // whole again from its storage and stays whole (vka_tex.c soft_harden). Any thread that records; no render pass may be open in cb unless upload batches are on
  void vka_tex_soft_copy(vka_img *im, int dst_level, VkCommandBuffer cb);
@@ -13,6 +13,7 @@ index de7b3026..d286214c 100644
 +void vka_caud_scan(VkCommandBuffer cb, uint64_t fence);
 +void vka_astc_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: how the device samples the kinds of ASTC blocks an upload takes out, once
 +void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence);   // vka_nanscan.c: every level of small mip-mapped compressed textures written as an upload and as a copy write them, then sampled and read back, once
++uint32_t vka_block_reach(uint32_t w, uint32_t h, uint32_t bw, uint32_t bh, uint32_t levels);   // vka_tex.c: the first level of a block-compressed image RADV is taken to write through its non-block-compressed view (levels: none)
 +int vka_fetch_level(VkCommandBuffer cb, vka_img *im, VkFormat fmt, uint32_t lv, uint32_t ly, uint32_t w, uint32_t h, VkBuffer buf, VkDeviceSize off);   // vka_nanscan.c: a level and layer as the device samples it (a vec4 a texel)
  void vka_tex_soft_stats(char *b, size_t n);          // soft textures now: how many, the storage bytes their finest levels take, and how many went whole
  void vka_tex_big_stats(char *b, size_t n);           // the largest images the GPU has not written, with what sampled them and what lies over their storage (DM_VK_BIGIMG_MB)
@@ -192,10 +193,10 @@ index 66e17d3f..56f1af1b 100644
      vka_barrier(g_cb);
  }
 diff --git a/dm/gfx/vk_android/vka_nanscan.c b/dm/gfx/vk_android/vka_nanscan.c
-index 44d32b05..e3b6dbc6 100644
+index 44d32b05..8d3b375e 100644
 --- a/dm/gfx/vk_android/vka_nanscan.c
 +++ b/dm/gfx/vk_android/vka_nanscan.c
-@@ -128,6 +128,202 @@ static void astc_check(VkCommandBuffer cb) {
+@@ -128,6 +128,206 @@ static void astc_check(VkCommandBuffer cb) {
      vka_barrier(cb);
      g_astc_state = 1;
  }
@@ -270,11 +271,14 @@ index 44d32b05..e3b6dbc6 100644
 +// every level and layer of both is sampled (the block's first texel) and copied out (its bytes), and the lines say per level how many blocks came back right each way.
 +// Sizes that are no power of two are there for the levels a driver cannot reach by halving the first level's block count: RADV views a compressed image as an
 +// uncompressed one of its blocks to copy into or out of it, and a level of 42 texels has 6 blocks of 8 where half of the 11 blocks of 85 texels is 5
-+enum { MP_REC = 640, MP_OUT = 8 << 20, MP_BLK = 512 << 10, MP_STORE = 2 << 20 };
-+typedef struct { int fmt; uint32_t bw, bh, w, h, layers, levels; const char *name; } mp_shape;
++// The last three are sizes of Mario Kart World's own textures, looked at from the level `from` on (the larger levels are left empty): 256x384 texels of 8x8 blocks, whose
++// level 5 the S26 sampled as the error colour in the game; the same block counts as BC3; and 1024x768, whose level 6 vka_block_reach names and the S26 sampled right
++enum { MP_REC = 640, MP_OUT = 12 << 20, MP_BLK = 512 << 10, MP_STORE = 4 << 20 };
++typedef struct { int fmt; uint32_t bw, bh, w, h, layers, levels; const char *name; uint32_t from; } mp_shape;
 +static const mp_shape g_mps[] = {
 +    {0x80, 8, 8, 128, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 4, 4, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 119, 128, 1, 8, "ASTC 8x8"},
 +    {0x80, 8, 8, 128, 48, 4, 6, "ASTC 8x8"}, {0x80, 8, 8, 104, 127, 1, 7, "ASTC 8x8"}, {0x79, 4, 4, 85, 128, 1, 8, "ASTC 4x4"}, {0x44, 4, 4, 85, 128, 1, 8, "BC3"},
++    {0x80, 8, 8, 256, 384, 1, 9, "ASTC 8x8", 2}, {0x44, 4, 4, 128, 192, 1, 8, "BC3", 1}, {0x80, 8, 8, 1024, 768, 1, 11, "ASTC 8x8", 4},
 +};
 +enum { MP_N = sizeof g_mps / sizeof *g_mps };
 +typedef struct { uint8_t shape, img, level, layer; uint32_t w, h, bx, by; VkDeviceSize samp, rb; } mp_rec;   // samp: its texels in out (a vec4 each); rb: its blocks read back
@@ -311,9 +315,10 @@ index 44d32b05..e3b6dbc6 100644
 +                }
 +            }
 +            if (!tot[0] && !tot[1]) continue;
-+            int halves = (bx0 >> lv ? bx0 >> lv : 1) >= bx && (by0 >> lv ? by0 >> lv : 1) >= by;
-+            VLOG("copy audit: mip check: %s %ux%u x%u level %u (%ux%u, %ux%u blocks%s): uploaded: %u of %u blocks sample right, %u as the error colour, %u read back right%s; copied from it: %u of %u sample right, %u as the error colour, %u read back right%s",
-+                 s->name, s->w, s->h, s->layers, lv, w, h, bx, by, halves ? "" : ", more than the first level's halved", sok[0], tot[0], serr[0], rok[0], first[0], sok[1], tot[1], serr[1], rok[1], first[1]);
++            int halves = (bx0 >> lv ? bx0 >> lv : 1) >= bx && (by0 >> lv ? by0 >> lv : 1) >= by, past = lv >= vka_block_reach(s->w, s->h, s->bw, s->bh, s->levels);
++            VLOG("copy audit: mip check: %s %ux%u x%u level %u (%ux%u, %ux%u blocks%s%s): uploaded: %u of %u blocks sample right, %u as the error colour, %u read back right%s; copied from it: %u of %u sample right, %u as the error colour, %u read back right%s",
++                 s->name, s->w, s->h, s->layers, lv, w, h, bx, by, halves ? "" : ", more than the first level's halved", past ? ", a level the rule for RADV's non-block-compressed view leaves out" : "",
++                 sok[0], tot[0], serr[0], rok[0], first[0], sok[1], tot[1], serr[1], rok[1], first[1]);
 +        }
 +    }
 +}
@@ -338,7 +343,7 @@ index 44d32b05..e3b6dbc6 100644
 +        }
 +        if (!ok) { VLOG("copy audit: mip check: %s %ux%u x%u: no test texture", s->name, s->w, s->h, s->layers); continue; }
 +        vka_tex_own(ims[0], cb); vka_tex_own(ims[1], cb); vka_barrier(cb);
-+        for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as an upload
++        for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as an upload
 +            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
 +            if (uo + (VkDeviceSize)bx * by * 16 > MP_BLK) continue;
 +            for (uint32_t y = 0; y < by; y++) for (uint32_t x = 0; x < bx; x++) { float e[4]; mp_block(s, lv, ly, x, y, g_mp.up.ptr + uo + 16 * ((size_t)y * bx + x), e); }
@@ -347,13 +352,13 @@ index 44d32b05..e3b6dbc6 100644
 +            uo += (VkDeviceSize)bx * by * 16;
 +        }
 +        vka_barrier(cb);   // (not marked GPU-written: nothing uploads these again, and the scan leaves them out)
-+        for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
++        for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
 +            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1;
 +            VkImageCopy r = {{VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
 +            vk.vkCmdCopyImage(cb, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, ims[1]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
 +        }
 +        vka_barrier(cb);
-+        for (int k = 0; k < 2; k++) for (uint32_t lv = 0; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
++        for (int k = 0; k < 2; k++) for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
 +            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
 +            VkDeviceSize sn = (VkDeviceSize)w * h * 16, bn = (VkDeviceSize)bx * by * 16;
 +            if (g_mp.n == MP_REC || oo + sn > MP_OUT || ro + bn > MP_BLK) continue;
@@ -399,7 +404,7 @@ index 44d32b05..e3b6dbc6 100644
  static int scan_one(VkCommandBuffer cb, batch_t *b, vka_img *im, uint32_t lv, uint32_t l0, uint32_t pass, int bind, int tid, uint64_t stats) {
      if (b->n == MAXR) return 0;
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 9a3dd137..33f528b2 100644
+index 9a3dd137..20359eb8 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -8,6 +8,7 @@
@@ -410,7 +415,7 @@ index 9a3dd137..33f528b2 100644
  #include "../tex/nvn_deswizzle.h"
  #include "../nvn/dmsh_abi_vk.h"
  #include "../nvn/nvn_dirty.h"
-@@ -2800,6 +2801,19 @@ static VkComponentSwizzle swz1(int n) { return n >= 0 && n <= 5 ? (VkComponentSw
+@@ -2800,6 +2801,20 @@ static VkComponentSwizzle swz1(int n) { return n >= 0 && n <= 5 ? (VkComponentSw
  // each drawn from the one above through a view of the whole chain; sampling the attached level is a feedback loop Vulkan leaves undefined (on Adreno: NaN texels, which bloom
  // spread into white blotches and black speckles over the whole level)
  static vka_img *g_fb_im[9]; static uint32_t g_fb_lv[9]; static int g_nfb;
@@ -419,18 +424,19 @@ index 9a3dd137..33f528b2 100644
 +// a size is no power of two (1024x384 texels of 8x8 blocks: 48 block rows, level 5 has 2 and 48 >> 5 is 1). RADV then widens the view, as far as the first level's
 +// padding goes (taken as to 16 blocks, the least the copy audit's measurements allow), and past that takes addrlib's non-block-compressed view. → the first level that
 +// needs that view, or the image's level count when none does
-+static uint32_t astc_reach_levels(const vka_img *im) {
-+    for (uint32_t i = 1; i < im->levels; i++) for (int k = 0; k < 2; k++) {
-+        uint32_t d = k ? im->h : im->w, b = k ? im->f.bh : im->f.bw, base = (d + b - 1) / b, pad = (base + 15) & ~15u, lv = d >> i ? d >> i : 1, need = (lv + b - 1) / b;
++uint32_t vka_block_reach(uint32_t w, uint32_t h, uint32_t bw, uint32_t bh, uint32_t levels) {
++    for (uint32_t i = 1; i < levels; i++) for (int k = 0; k < 2; k++) {
++        uint32_t d = k ? h : w, b = k ? bh : bw, base = (d + b - 1) / b, pad = (base + 15) & ~15u, lv = d >> i ? d >> i : 1, need = (lv + b - 1) / b;
 +        uint64_t ext = (uint64_t)need << i; if (ext < base) ext = base; if (ext > pad) ext = pad;
 +        if ((ext >> i ? ext >> i : 1) < need) return i;
 +    }
-+    return im->levels;
++    return levels;
 +}
++static uint32_t astc_reach_levels(const vka_img *im) { return vka_block_reach(im->w, im->h, im->f.bw, im->f.bh, im->levels); }
  void vka_tex_feedback(vka_img *const *ims, const uint32_t *levels, int n) { g_nfb = n > 9 ? 9 : n; for (int i = 0; i < g_nfb; i++) { g_fb_im[i] = ims[i]; g_fb_lv[i] = levels[i]; } }
  static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int storage, VkFormat ovr) {
      vka_fmt f; const view_t *v = e->has_v ? &e->v : NULL;
-@@ -3335,6 +3349,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -3335,6 +3350,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
              if (vka_scratch(w->size, 16, &s)) {
                  for (int j = 0; j < i; j++) if (reg_write_overlap(&g_reg_writes[j], w)) { vka_barrier(cb); break; }
                  memcpy(s.ptr, w->data, w->size);
@@ -438,7 +444,7 @@ index 9a3dd137..33f528b2 100644
                  VkBufferImageCopy c = {
                      .bufferOffset = s.off,
                      .bufferRowLength = 0,
-@@ -3682,4 +3697,273 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -3682,4 +3698,273 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
               done ? how : "nothing readable", done ? "" : ": zeros");
      if (im) vka_tex_drop(im);
  }
