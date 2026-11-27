@@ -8,7 +8,9 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <memory>
+#include <utility>
 #include <optional>
 #include <string>
 #include <vector>
@@ -212,6 +214,9 @@ private:
 
     // maps tid -> NcaID of meta
     ::Common::unordered_map<u64, NcaID> meta_id;
+    // A Switch 2 title's contents by what their own headers say (its id, under 04, and the content
+    // type): where its metadata names no content of a type, this does (GetNcaIDFromMetadata).
+    std::map<std::pair<u64, ContentRecordType>, NcaID> header_index;
     // maps tid -> meta
     ::Common::unordered_map<u64, CNMT> meta;
     // maps tid -> meta for CNMT in yuzu_meta

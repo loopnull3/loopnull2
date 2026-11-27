@@ -30,24 +30,58 @@ static u8 MasterKeyIdForKeyGeneration(u8 key_generation) {
 }
 
 NCA::NCA(VirtualFile file_, const NCA* base_nca, bool allow_missing_base)
-    : file(std::move(file_)), keys{Core::Crypto::KeyManager::Instance()} {
+    : file(std::move(file_)) {
     if (file == nullptr) {
         status = Loader::ResultStatus::ErrorNullFile;
         return;
     }
 
+    {
+        Core::Crypto::KeyManager::ScopedKeySet scope{nullptr};
+        status = Open(Core::Crypto::KeyManager::Instance(), base_nca, allow_missing_base);
+    }
+
+    // Content of another console (a Switch 2's system titles beside a Switch's keys, or the other
+    // way round) does not open with the main keys: its header does not decrypt, or its key
+    // generation is missing. Try the other key files' sets before giving up.
+    const auto needs_other_keys = [](Loader::ResultStatus s) {
+        return s == Loader::ResultStatus::ErrorBadNCAHeader ||
+               s == Loader::ResultStatus::ErrorMissingKeyAreaKey ||
+               s == Loader::ResultStatus::ErrorMissingTitlekey ||
+               s == Loader::ResultStatus::ErrorMissingTitlekek;
+    };
+    if (!needs_other_keys(status)) {
+        return;
+    }
+    const auto first_status = status;
+    for (const auto& set : Core::Crypto::KeyManager::Alternates()) {
+        Core::Crypto::KeyManager::ScopedKeySet scope{set.get()};
+        sections.clear();
+        is_update = false;
+        const auto with_set = Open(*set, base_nca, allow_missing_base);
+        if (!needs_other_keys(with_set)) {
+            key_set = set;
+            status = with_set;
+            return;
+        }
+    }
+    sections.clear();
+    is_update = false;
+    status = first_status;
+}
+
+Loader::ResultStatus NCA::Open(const Core::Crypto::KeyManager& keys, const NCA* base_nca,
+                               bool allow_missing_base) {
     reader = std::make_shared<NcaReader>();
     if (Result rc = reader->Initialize(file, GetCryptoConfiguration(), GetNcaCompressionConfiguration()); R_FAILED(rc)) {
-        status = Loader::ResultStatus::ErrorBadNCAHeader;
-        return;
+        return Loader::ResultStatus::ErrorBadNCAHeader;
     }
 
     // Ensure we have the proper key area keys to continue.
     const u8 master_key_id = MasterKeyIdForKeyGeneration(reader->GetKeyGeneration());
     if (!keys.HasKey(Core::Crypto::S128KeyType::KeyArea, master_key_id, reader->GetKeyIndex())) {
         LOG_ERROR(Loader, "Cannot decrypt {}: keys for gen 0x{:02X}+ required.", file->GetName(), reader->GetKeyGeneration());
-        status = Loader::ResultStatus::ErrorMissingKeyAreaKey;
-        return;
+        return Loader::ResultStatus::ErrorMissingKeyAreaKey;
     }
 
     RightsId rights_id{};
@@ -57,16 +91,19 @@ NCA::NCA(VirtualFile file_, const NCA* base_nca, bool allow_missing_base)
         u128 rights_id_u128;
         std::memcpy(rights_id_u128.data(), rights_id.data(), sizeof(rights_id));
 
+        // (Title keys read from tickets are kept by the main set.)
         auto titlekey =
             keys.GetKey(Core::Crypto::S128KeyType::Titlekey, rights_id_u128[1], rights_id_u128[0]);
         if (titlekey == Core::Crypto::Key128{}) {
-            status = Loader::ResultStatus::ErrorMissingTitlekey;
-            return;
+            titlekey = Core::Crypto::KeyManager::Instance().GetKey(
+                Core::Crypto::S128KeyType::Titlekey, rights_id_u128[1], rights_id_u128[0]);
+        }
+        if (titlekey == Core::Crypto::Key128{}) {
+            return Loader::ResultStatus::ErrorMissingTitlekey;
         }
 
         if (!keys.HasKey(Core::Crypto::S128KeyType::Titlekek, master_key_id)) {
-            status = Loader::ResultStatus::ErrorMissingTitlekek;
-            return;
+            return Loader::ResultStatus::ErrorMissingTitlekek;
         }
 
         auto titlekek = keys.GetKey(Core::Crypto::S128KeyType::Titlekek, master_key_id);
@@ -82,8 +119,7 @@ NCA::NCA(VirtualFile file_, const NCA* base_nca, bool allow_missing_base)
     for (s32 i = 0; i < fs_count; i++) {
         NcaFsHeaderReader header_reader;
         if (!reader->HasFsInfo(i) || R_FAILED(header_reader.Initialize(*reader, i))) {
-            status = Loader::ResultStatus::ErrorBadNCAHeader;
-            return;
+            return Loader::ResultStatus::ErrorBadNCAHeader;
         }
 
         auto& section = sections.emplace_back();
@@ -96,10 +132,9 @@ NCA::NCA(VirtualFile file_, const NCA* base_nca, bool allow_missing_base)
     }
 
     if (is_update && base_nca == nullptr && !allow_missing_base) {
-        status = Loader::ResultStatus::ErrorMissingBKTRBaseRomFS;
-    } else {
-        status = Loader::ResultStatus::Success;
+        return Loader::ResultStatus::ErrorMissingBKTRBaseRomFS;
     }
+    return Loader::ResultStatus::Success;
 }
 
 NCA::~NCA() = default;
@@ -113,6 +148,7 @@ void NCA::OpenSection(Section& section) const {
         return;
     }
     section.opened = true;
+    Core::Crypto::KeyManager::ScopedKeySet scope{key_set.get()};
     NcaFileSystemDriver fs(base_reader, reader);
     NcaFsHeaderReader header_reader;
     if (R_FAILED(fs.OpenStorage(&section.storage, &header_reader, section.index))) {

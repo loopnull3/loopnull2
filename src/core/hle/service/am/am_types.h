@@ -121,6 +121,12 @@ enum class AppletProgramId : u64 {
     MaxProgramId = 0x0100000000001FFFull,
 };
 
+// A system title's id on the Switch 2: the Switch's number under 04. Its home menu is
+// 0400000000001000, its overlay 040000000000100C, its system version data 0400000000000809.
+constexpr u64 Switch2ProgramId(u64 program_id) {
+    return (program_id & 0x00FFFFFFFFFFFFFFull) | 0x0400000000000000ull;
+}
+
 // This is nn::am::AppletMessage
 enum class AppletMessage : u32 {
     None = 0,

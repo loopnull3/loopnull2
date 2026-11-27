@@ -59,6 +59,7 @@ extern "C" {
 #include "core/crypto/key_manager.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
+#include "core/file_sys/fssystem/fssystem_aes_xts_storage.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/romfs.h"
@@ -271,6 +272,29 @@ void EmulationSession::InitializeSystem(bool reload) {
     m_system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual,
                                      m_manual_provider.get());
     m_system.GetFileSystemController().CreateFactories(*m_vfs);
+
+    // What the installed firmware and keys amount to (a Switch 2 firmware is kept beside a Switch
+    // one, each opened by its own console's keys): a QLaunch attempt's log starts from this.
+    if (const auto* const bis_system = m_system.GetFileSystemController().GetSystemNANDContents()) {
+        std::size_t switch_entries = 0, switch2_entries = 0;
+        for (const auto& entry : bis_system->ListEntries()) {
+            ((entry.title_id >> 56) == 0x04 ? switch2_entries : switch_entries)++;
+        }
+        const auto has_program = [&](u64 title_id) {
+            return bis_system->GetEntry(title_id, FileSys::ContentRecordType::Program) != nullptr;
+        };
+        LOG_INFO(Frontend,
+                 "System titles: {} entries of a Switch firmware, {} of a Switch 2 firmware; "
+                 "home menu: Switch {}, Switch 2 {}; key files beside prod.keys: {}",
+                 switch_entries, switch2_entries, has_program(0x0100000000001000ULL) ? "yes" : "no",
+                 has_program(0x0400000000001000ULL) ? "yes" : "no",
+                 Core::Crypto::KeyManager::Alternates().size());
+        LOG_INFO(Frontend, "Keys: prod.keys has {}",
+                 Core::Crypto::KeyManager::Instance().Describe());
+        for (const auto& set : Core::Crypto::KeyManager::Alternates()) {
+            LOG_INFO(Frontend, "Keys: another key file has {}", set->Describe());
+        }
+    }
 }
 
 void EmulationSession::SetAppletId(int applet_id) {
@@ -1482,6 +1506,83 @@ bool isFirmwarePresent() {
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_isFirmwareAvailable(JNIEnv* env, jclass clazz) {
     return isFirmwarePresent();
+}
+
+// For the log of a firmware that does not open: what a file's header magic and key generation read
+// as with one key set ("4e434133", NCA3, when the set's header key is the right one).
+static std::string NcaHeaderWith(const FileSys::VirtualFile& file,
+                                 const Core::Crypto::KeyManager& keys) {
+    if (!keys.HasKey(Core::Crypto::S256KeyType::Header)) {
+        return "no header key";
+    }
+    const auto key = keys.GetKey(Core::Crypto::S256KeyType::Header);
+    std::array<u8, 0x10> iv{};
+    const FileSys::AesXtsStorage storage{file,      key.data(), key.data() + 0x10, 0x20,
+                                         iv.data(), iv.size(),  0x200};
+    std::array<u8, 0x400> header{};
+    if (storage.Read(header.data(), header.size(), 0) != header.size()) {
+        return "short file";
+    }
+    return fmt::format("{:02x}{:02x}{:02x}{:02x} (key generation {:#x} / {:#x})", header[0x200],
+                       header[0x201], header[0x202], header[0x203], header[0x206], header[0x220]);
+}
+
+// The console the firmware files in a folder are for, before they are installed: the first file
+// that opens tells by its title id (a Switch 2's system titles are 04..., a Switch's 01...).
+// → 2 = Switch 2, 1 = Switch, 0 = the installed keys open none of the first files
+jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jclass clazz,
+                                                                 jstring jpath) {
+    const auto path = Common::Android::GetJString(env, jpath);
+    const auto vfs = std::make_shared<FileSys::RealVfsFilesystem>();
+    const auto dir = vfs->OpenDirectory(path, FileSys::OpenMode::Read);
+    if (dir == nullptr) {
+        LOG_ERROR(Frontend, "Firmware files: cannot open {}", path);
+        return 0;
+    }
+    int tried = 0;
+    Loader::ResultStatus first_status = Loader::ResultStatus::Success;
+    FileSys::VirtualFile first_file;
+    for (const auto& file : dir->GetFiles()) {
+        if (file == nullptr || !file->GetName().ends_with(".nca")) {
+            continue;
+        }
+        const FileSys::NCA nca{file};
+        const auto status = nca.GetStatus();
+        if (status != Loader::ResultStatus::Success &&
+            status != Loader::ResultStatus::ErrorMissingBKTRBaseRomFS) {
+            if (tried++ == 0) {
+                first_status = status;
+                first_file = file;
+            }
+            if (tried >= 24) {
+                break;
+            }
+            continue;
+        }
+        const u64 title_id = nca.GetTitleId();
+        const int platform = (title_id >> 56) == 0x04 ? 2 : 1;
+        LOG_INFO(Frontend,
+                 "Firmware files: {} is title {:016X} (key generation {:#x}): a {} firmware "
+                 "({} files before it did not open)",
+                 file->GetName(), title_id, nca.GetKeyGeneration(),
+                 platform == 2 ? "Switch 2" : "Switch", tried);
+        return platform;
+    }
+    LOG_ERROR(Frontend,
+              "Firmware files: none of the first {} files opens with the installed keys (the "
+              "first one: {}; {} other key files beside prod.keys)",
+              tried, Loader::GetResultStatusString(first_status),
+              Core::Crypto::KeyManager::Alternates().size());
+    if (first_file != nullptr) {
+        LOG_ERROR(Frontend, "Firmware files: the header of {} reads as {} with the main keys",
+                  first_file->GetName(),
+                  NcaHeaderWith(first_file, Core::Crypto::KeyManager::Instance()));
+        for (const auto& set : Core::Crypto::KeyManager::Alternates()) {
+            LOG_ERROR(Frontend, "Firmware files: ... and as {} with another key file",
+                      NcaHeaderWith(first_file, *set));
+        }
+    }
+    return 0;
 }
 
 jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareVersion(JNIEnv* env, jclass clazz) {

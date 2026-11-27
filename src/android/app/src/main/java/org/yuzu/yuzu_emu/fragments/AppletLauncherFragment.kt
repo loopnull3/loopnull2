@@ -19,6 +19,7 @@ import org.yuzu.yuzu_emu.adapters.AppletAdapter
 import org.yuzu.yuzu_emu.databinding.FragmentAppletLauncherBinding
 import org.yuzu.yuzu_emu.model.Applet
 import org.yuzu.yuzu_emu.model.AppletInfo
+import org.yuzu.yuzu_emu.model.HomeMenu
 import org.yuzu.yuzu_emu.model.HomeViewModel
 import org.yuzu.yuzu_emu.utils.ViewUtils.updateMargins
 
@@ -77,7 +78,18 @@ class AppletLauncherFragment : Fragment() {
                 R.drawable.ic_home,
                 AppletInfo.QLaunch
             )
-        )
+        ) + if (HomeMenu.hasBoth()) {
+            listOf(
+                Applet(
+                    R.string.qlaunch_switch_applet,
+                    R.string.qlaunch_switch_description,
+                    R.drawable.ic_home,
+                    AppletInfo.QLaunch
+                )
+            )
+        } else {
+            emptyList<Applet>()
+        }
 
         binding.listApplets.apply {
             layoutManager = GridLayoutManager(

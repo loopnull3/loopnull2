@@ -653,7 +653,16 @@ std::optional<NcaID> RegisteredCache::GetNcaIDFromMetadata(u64 title_id,
     const auto res1 = CheckMapForContentRecord(yuzu_meta, title_id, type);
     if (res1)
         return res1;
-    return CheckMapForContentRecord(meta, title_id, type);
+    const auto res2 = CheckMapForContentRecord(meta, title_id, type);
+    if (res2)
+        return res2;
+    // A Switch 2 firmware's titles are also known by their contents' own headers: its metadata
+    // has not been read by this code before and may name them differently.
+    if (const auto iter = header_index.find(std::make_pair(title_id, type));
+        iter != header_index.end()) {
+        return iter->second;
+    }
+    return std::nullopt;
 }
 
 std::vector<NcaID> RegisteredCache::AccumulateFiles() const {
@@ -699,8 +708,14 @@ void RegisteredCache::ProcessFiles(const std::vector<NcaID>& ids) {
         if (file == nullptr)
             continue;
         const auto nca = std::make_shared<NCA>(parser(file, id));
-        if (nca->GetStatus() != Loader::ResultStatus::Success ||
-            nca->GetType() != NCAContentType::Meta || nca->GetSubdirectories().empty()) {
+        if (nca->GetStatus() != Loader::ResultStatus::Success) {
+            continue;
+        }
+        if ((nca->GetTitleId() >> 56) == 0x04) {
+            header_index.insert_or_assign(
+                std::make_pair(nca->GetTitleId(), GetCRTypeFromNCAType(nca->GetType())), id);
+        }
+        if (nca->GetType() != NCAContentType::Meta || nca->GetSubdirectories().empty()) {
             continue;
         }
 

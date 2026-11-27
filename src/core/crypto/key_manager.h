@@ -9,11 +9,13 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 
 #include <variant>
+#include <vector>
 #include <fmt/ranges.h>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -259,6 +261,35 @@ public:
         return instance;
     }
 
+    /// The key sets of the other key files in the keys directory (every *.keys file but
+    /// prod.keys, title.keys, console.keys and dev.keys): the keys of a second console kept
+    /// beside the first one's, as a Switch 2's are beside a Switch's. Content the main set cannot
+    /// open is tried with each of them (FileSys::NCA).
+    static std::vector<std::shared_ptr<const KeyManager>> Alternates();
+
+    /// The key set content keys are made from on this thread: Instance(), unless a ScopedKeySet
+    /// names another (FileSys::NCA does while it opens content of an alternate set).
+    static const KeyManager& Current();
+
+    class ScopedKeySet {
+    public:
+        explicit ScopedKeySet(const KeyManager* set);
+        ~ScopedKeySet();
+
+        ScopedKeySet(const ScopedKeySet&) = delete;
+        ScopedKeySet& operator=(const ScopedKeySet&) = delete;
+
+    private:
+        const KeyManager* previous;
+    };
+
+    /// True when the key file alone holds the keys BaseDeriveNecessary asks for.
+    static bool FileHasBaseKeys(const std::filesystem::path& file_path);
+
+    /// What the set holds, for the log (no key values): whether it has the header key, and the
+    /// generations of its system key area keys.
+    std::string Describe() const;
+
     KeyManager(const KeyManager&) = delete;
     KeyManager& operator=(const KeyManager&) = delete;
 
@@ -300,6 +331,10 @@ public:
 
 private:
     KeyManager();
+    /// The keys of one file: nothing is derived from them and nothing written.
+    explicit KeyManager(const std::filesystem::path& file_path);
+
+    static void ReloadAlternates(const std::filesystem::path& keys_dir);
 
     std::map<KeyIndex<S128KeyType>, Key128> s128_keys;
     std::map<KeyIndex<S256KeyType>, Key256> s256_keys;

@@ -5,6 +5,7 @@ package org.yuzu.yuzu_emu.model
 
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 
 data class Applet(
@@ -14,6 +15,22 @@ data class Applet(
     val appletInfo: AppletInfo,
     val cabinetMode: CabinetMode = CabinetMode.None
 )
+
+// The home menu QLaunch boots: an installed Switch 2 firmware's (its system titles are the
+// Switch's numbers under 04), else the Switch firmware's.
+object HomeMenu {
+    const val SWITCH2_ENTRY_ID = 0x0400000000001000L
+
+    fun launchPath(): String =
+        NativeLibrary.getAppletLaunchPath(SWITCH2_ENTRY_ID).ifEmpty {
+            NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
+        }
+
+    /** Both home menus are installed: the Switch one gets its own entry in the applet list. */
+    fun hasBoth(): Boolean =
+        NativeLibrary.getAppletLaunchPath(SWITCH2_ENTRY_ID).isNotEmpty() &&
+            NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId).isNotEmpty()
+}
 
 // Combination of Common::AM::Applets::AppletId enum and the entry id
 enum class AppletInfo(val appletId: Int, val entryId: Long = 0) {

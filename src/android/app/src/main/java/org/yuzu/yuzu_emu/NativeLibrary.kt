@@ -532,6 +532,15 @@ object NativeLibrary {
     external fun firmwareVersion(): String
 
     /**
+     * Tells which console the firmware files in a folder are for, before they are installed.
+     *
+     * @param path Folder with the firmware's .nca files
+     * @return 2 for a Switch 2 firmware, 1 for a Switch firmware, 0 when the installed keys open
+     * none of the files
+     */
+    external fun firmwareFilesPlatform(path: String): Int
+
+    /**
      * Check if a game requires firmware to be playable.
      *
      * @param programId The game's Program ID.

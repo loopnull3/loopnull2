@@ -26,7 +26,8 @@ void GenerateKey(void* dst_key, size_t dst_key_size, const void* src_key, size_t
         return;
     }
 
-    const auto& instance = Core::Crypto::KeyManager::Instance();
+    // (The key set of the archive being opened: FileSys::NCA names a second console's.)
+    const auto& instance = Core::Crypto::KeyManager::Current();
 
     if (key_type == static_cast<s32>(KeyType::NcaHeaderKey1) ||
         key_type == static_cast<s32>(KeyType::NcaHeaderKey2)) {

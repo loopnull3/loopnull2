@@ -7,6 +7,7 @@
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/core_timing.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_data_broker.h"
@@ -284,7 +285,18 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
 
     m_cv.wait(lk, [&] { return m_pending_process != nullptr; });
 
-    if (Settings::values.enable_overlay && m_window_system->GetOverlayDisplayApplet() == nullptr) {
+    // The overlay applet started here is the Switch firmware's. A Switch 2 home menu runs under
+    // the Switch 2's clock and memory layout, which that program is not made for, and its own
+    // overlay (040000000000100C) is not started yet.
+    const auto* const pending_process = m_pending_process->GetHandle();
+    const bool switch2_menu = m_pending_parameters.applet_id == AppletId::QLaunch &&
+                              pending_process != nullptr && pending_process->IsSwitch2();
+    if (switch2_menu) {
+        LOG_INFO(Service_AM, "Switch 2 home menu: started without an overlay applet");
+    }
+
+    if (Settings::values.enable_overlay && !switch2_menu &&
+        m_window_system->GetOverlayDisplayApplet() == nullptr) {
         if (auto overlay_process = CreateProcess(m_system, static_cast<u64>(AppletProgramId::OverlayDisplay), 0, 0)) {
             auto overlay_applet = std::make_shared<Applet>(m_system, std::move(overlay_process), false);
             overlay_applet->program_id = static_cast<u64>(AppletProgramId::OverlayDisplay);

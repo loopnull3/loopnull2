@@ -232,6 +232,30 @@ Controller ports now follow the controllers themselves rather than the order the
 so the pair keeps its mapping whichever Joy-Con reconnects first. If you used several controllers
 before, auto-map them once more.
 
+## QLaunch and a Switch 2 firmware
+
+QLaunch boots the home menu of an installed firmware. Hokkaido takes a Switch firmware, whose
+home menu is title `0100000000001000`. A Switch 2 keeps its system titles under the same numbers
+with `04` in front (its home menu is `0400000000001000`), and its files open only with a
+Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
+
+- **Install keys** keeps a second key file. A file named `prod.keys` no longer replaces the
+  installed one: the file with the base keys stays `prod.keys` and the other is kept as
+  `prod.<hash>.keys`. Every other `*.keys` file in the keys folder is a key set too, and content
+  that the main set cannot open is tried with each.
+- **Install firmware** tells the console from the first file that opens and replaces only that
+  console's files. When the installed keys open none of the files it says so and changes
+  nothing: install that console's keys first.
+- **QLaunch** boots the Switch 2's home menu when its firmware is installed, else the Switch's.
+  With both, the applet list has an entry for each.
+- The home menu's own applets are looked for under `04`, a Switch 2 program is told its own
+  firmware's version, and the three `ns` calls a 23.5.0 home menu makes at start are answered
+  (from Eglantine's `fix/qlaunch-ns-3250-3251`).
+
+None of this has run with a Switch 2 firmware: whether the files open with this reader, and
+how far the home menu gets, a log of a first attempt will say (`System titles:` and `Keys:` lines
+at start, `Firmware files:` lines at an install).
+
 ## Reporting problems
 
 Include your phone model, Android version and GPU driver, the game, the engine, the LoopNative

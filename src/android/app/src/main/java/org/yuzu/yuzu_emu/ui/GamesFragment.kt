@@ -42,6 +42,7 @@ import org.yuzu.yuzu_emu.adapters.GameAdapter
 import org.yuzu.yuzu_emu.databinding.FragmentGamesBinding
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.model.AppletInfo
+import org.yuzu.yuzu_emu.model.HomeMenu
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.model.GamesViewModel
 import org.yuzu.yuzu_emu.model.HomeViewModel
@@ -601,7 +602,7 @@ class GamesFragment : Fragment() {
 
     private fun launchQLaunch() {
         try {
-            val appletPath = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
+            val appletPath = HomeMenu.launchPath()
             if (appletPath.isEmpty()) {
                 Toast.makeText(
                     requireContext(),

@@ -153,15 +153,48 @@ object InstallableActions {
                 )
                 val unfilteredNumOfFiles = cacheFirmwareDir.list()?.size ?: -1
                 val filteredNumOfFiles = cacheFirmwareDir.list(filterNCA)?.size ?: -2
+                // 2 = a Switch 2 firmware, 1 = a Switch firmware, 0 = the installed keys open none
+                // of its files (the keys of that console come first)
+                val platform = if (unfilteredNumOfFiles == filteredNumOfFiles) {
+                    NativeLibrary.firmwareFilesPlatform(cacheFirmwareDir.path)
+                } else {
+                    0
+                }
                 messageToShow = if (unfilteredNumOfFiles != filteredNumOfFiles) {
                     MessageDialogFragment.newInstance(
                         activity,
                         titleId = R.string.firmware_installed_failure,
                         descriptionId = R.string.firmware_installed_failure_description
                     )
+                } else if (platform == 0) {
+                    MessageDialogFragment.newInstance(
+                        activity,
+                        titleId = R.string.firmware_installed_failure,
+                        descriptionId = R.string.firmware_unreadable_description
+                    )
                 } else {
-                    firmwarePath.deleteRecursively()
+                    // A Switch 2 firmware and a Switch firmware are kept side by side, and an
+                    // install replaces only the files of its own console: each list names the
+                    // files its firmware put there. Files from before the lists were kept are a
+                    // Switch firmware's.
+                    val lists = firmwarePath.parentFile
+                    val ownList = File(lists, firmwareListName(platform == 2))
+                    val otherNames = File(lists, firmwareListName(platform != 2))
+                        .takeIf { it.exists() }?.readLines()?.toSet() ?: emptySet()
+                    firmwarePath.mkdirs()
+                    if (ownList.exists()) {
+                        ownList.readLines().forEach {
+                            if (it.isNotEmpty() && it !in otherNames) {
+                                File(firmwarePath, it).delete()
+                            }
+                        }
+                    } else if (platform == 1) {
+                        firmwarePath.listFiles()?.forEach {
+                            if (it.name !in otherNames) it.deleteRecursively()
+                        }
+                    }
                     cacheFirmwareDir.copyRecursively(firmwarePath, overwrite = true)
+                    ownList.writeText(cacheFirmwareDir.list()?.joinToString("\n") ?: "")
                     NativeLibrary.initializeSystem(true)
                     homeViewModel.setCheckKeys(true)
                     activity.getString(R.string.save_file_imported_success)
@@ -177,6 +210,10 @@ object InstallableActions {
         }.show(fragmentManager, ProgressDialogFragment.TAG)
     }
 
+    /** The list of the files a firmware install put in the registered folder, kept beside it. */
+    private fun firmwareListName(switch2: Boolean) =
+        if (switch2) "firmware-switch2.txt" else "firmware-switch.txt"
+
     fun uninstallFirmware(
         activity: FragmentActivity,
         fragmentManager: FragmentManager,
@@ -190,6 +227,8 @@ object InstallableActions {
             val messageToShow: Any = try {
                 if (firmwarePath.exists()) {
                     firmwarePath.deleteRecursively()
+                    File(firmwarePath.parentFile, firmwareListName(true)).delete()
+                    File(firmwarePath.parentFile, firmwareListName(false)).delete()
                     NativeLibrary.initializeSystem(true)
                     homeViewModel.setCheckKeys(true)
                     activity.getString(R.string.firmware_uninstalled_success)

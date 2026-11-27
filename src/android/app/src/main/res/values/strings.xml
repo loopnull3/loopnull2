@@ -403,6 +403,7 @@
     <string name="firmware_installing">Installing firmware</string>
     <string name="firmware_installed_failure">Firmware installation failed</string>
     <string name="firmware_installed_failure_description">Make sure the firmware nca files are at the root of the zip and try again.</string>
+    <string name="firmware_unreadable_description">The installed keys cannot open this firmware. Install the keys of the same console first, then install the firmware again. Nothing was changed.</string>
     <string name="firmware_uninstalled_failure">Firmware uninstallation failed</string>
     <string name="share_log">Share debug logs</string>
     <string name="share_log_description">Share Hokkaido\'s log file to debug issues</string>
@@ -472,6 +473,8 @@
     <!-- Applet launcher strings -->
     <string name="qlaunch_applet">Qlaunch</string>
     <string name="qlaunch_description">Launch applications from the system home screen</string>
+    <string name="qlaunch_switch_applet">Qlaunch (Switch)</string>
+    <string name="qlaunch_switch_description">Launch the home screen of the Switch firmware</string>
     <string name="applets">Applet launcher</string>
     <string name="applets_description">Launch system applets using installed firmware</string>
     <string name="applets_error_firmware">Firmware not installed</string>

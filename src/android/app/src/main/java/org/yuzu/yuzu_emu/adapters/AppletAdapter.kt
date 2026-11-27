@@ -19,6 +19,7 @@ import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.databinding.CardSimpleOutlinedBinding
 import org.yuzu.yuzu_emu.model.Applet
 import org.yuzu.yuzu_emu.model.AppletInfo
+import org.yuzu.yuzu_emu.model.HomeMenu
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.viewholder.AbstractViewHolder
 
@@ -49,7 +50,15 @@ class AppletAdapter(val activity: FragmentActivity, applets: List<Applet>) :
         }
 
         fun onClick(applet: Applet) {
-            val appletPath = NativeLibrary.getAppletLaunchPath(applet.appletInfo.entryId)
+            // QLaunch boots the Switch 2's home menu when its firmware is installed; the entry
+            // named for the Switch boots that one.
+            val appletPath = if (applet.appletInfo == AppletInfo.QLaunch &&
+                applet.titleId != R.string.qlaunch_switch_applet
+            ) {
+                HomeMenu.launchPath()
+            } else {
+                NativeLibrary.getAppletLaunchPath(applet.appletInfo.entryId)
+            }
             if (appletPath.isEmpty()) {
                 Toast.makeText(
                     binding.root.context,

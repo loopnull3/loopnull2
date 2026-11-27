@@ -71,13 +71,28 @@ Result GetFirmwareVersionImpl(FirmwareVersionFormat& out_firmware, Core::System&
     std::unique_ptr<FileSys::NCA> nca{};
     FileSys::VirtualDir romfs{};
 
+    // A Switch 2 firmware may be installed beside the Switch one (its system version data is the
+    // same number under 04). A Switch 2 program is told its own firmware's version; anything else
+    // the Switch firmware's, and each falls back to the other when its own is not installed or
+    // does not read as a version file.
+    constexpr u64 Switch2FirmwareVersionSystemDataId = 0x0400000000000809;
+    const auto* const process = system.ApplicationProcess();
+    const bool switch2 = process != nullptr && process->IsSwitch2();
     bis_system = fsc.GetSystemNANDContents();
     if (bis_system) {
-        nca = bis_system->GetEntry(FirmwareVersionSystemDataId, FileSys::ContentRecordType::Data);
-    }
-    if (nca) {
-        if (auto nca_romfs = nca->GetRomFS(); nca_romfs) {
-            romfs = FileSys::ExtractRomFS(nca_romfs);
+        const std::array<u64, 2> ids{
+            switch2 ? Switch2FirmwareVersionSystemDataId : FirmwareVersionSystemDataId,
+            switch2 ? FirmwareVersionSystemDataId : Switch2FirmwareVersionSystemDataId,
+        };
+        for (const u64 id : ids) {
+            nca = bis_system->GetEntry(id, FileSys::ContentRecordType::Data);
+            const auto nca_romfs = nca ? nca->GetRomFS() : nullptr;
+            romfs = nca_romfs ? FileSys::ExtractRomFS(nca_romfs) : nullptr;
+            const auto version_file = romfs ? romfs->GetFile("file") : nullptr;
+            if (version_file && version_file->GetSize() == sizeof(FirmwareVersionFormat)) {
+                break;
+            }
+            romfs = nullptr;
         }
     }
     if (!romfs) {

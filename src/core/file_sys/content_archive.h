@@ -104,6 +104,10 @@ private:
 
     void OpenSection(Section& section) const;
 
+    /// Reads the header and the section table with one key set. → the archive's status with it
+    Loader::ResultStatus Open(const Core::Crypto::KeyManager& keys, const NCA* base_nca,
+                              bool allow_missing_base);
+
     mutable std::mutex sections_mutex;
     mutable std::vector<Section> sections;
 
@@ -115,7 +119,9 @@ private:
     bool encrypted = false;
     bool is_update = false;
 
-    Core::Crypto::KeyManager& keys;
+    /// The key set that opened it when the main one could not (Core::Crypto::KeyManager::
+    /// Alternates: a second console's keys), else null.
+    std::shared_ptr<const Core::Crypto::KeyManager> key_set;
     std::shared_ptr<NcaReader> reader;
 };
 

@@ -63,6 +63,20 @@ enum FirmwareCheckResult {
  * \param system The system to check for firmware.
  * \return Whether or not the system has installed firmware.
  */
+/**
+ * \brief Checks for an installed Switch 2 firmware (its home menu and the other system titles).
+ * A Switch firmware may be installed beside it; each needs its own console's keys.
+ */
+inline bool CheckSwitch2FirmwarePresence(Core::System &system)
+{
+    constexpr u64 MiiEditId = Service::AM::Switch2ProgramId(
+        static_cast<u64>(Service::AM::AppletProgramId::MiiEdit));
+
+    auto bis_system = system.GetFileSystemController().GetSystemNANDContents();
+    return bis_system
+           && bis_system->GetEntry(MiiEditId, FileSys::ContentRecordType::Program) != nullptr;
+}
+
 inline bool CheckFirmwarePresence(Core::System &system)
 {
     constexpr u64 MiiEditId = static_cast<u64>(Service::AM::AppletProgramId::MiiEdit);
@@ -75,7 +89,8 @@ inline bool CheckFirmwarePresence(Core::System &system)
     auto mii_applet_nca = bis_system->GetEntry(MiiEditId, FileSys::ContentRecordType::Program);
 
     if (!mii_applet_nca) {
-        return false;
+        // (A Switch 2 firmware alone counts: its home menu and applets are there.)
+        return CheckSwitch2FirmwarePresence(system);
     }
 
     return true;

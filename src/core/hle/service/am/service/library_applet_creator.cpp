@@ -142,13 +142,24 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
                                                           std::shared_ptr<Applet> caller_applet,
                                                           AppletId applet_id,
                                                           LibraryAppletMode mode) {
-    const auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
+    auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
     if (program_id == 0) {
         // Unknown applet
         return {};
     }
 
-    auto process = CreateProcess(system, program_id, 1, HLE::ApiVersion::HOS_VERSION_MAJOR);
+    // A Switch 2 program's library applets are its own firmware's, the same numbers under 04
+    // (the home menu's Setting applet is 040000000000100E). Their key generations are another
+    // console's, so the version range below is not asked of them.
+    const auto* const caller_process =
+        caller_applet && caller_applet->process ? caller_applet->process->GetHandle() : nullptr;
+    const bool switch2 = caller_process != nullptr && caller_process->IsSwitch2();
+    if (switch2) {
+        program_id = Switch2ProgramId(program_id);
+    }
+
+    auto process =
+        CreateProcess(system, program_id, switch2 ? 0 : 1, HLE::ApiVersion::HOS_VERSION_MAJOR);
     if (process) {
         const auto applet = std::make_shared<Applet>(system, std::move(process), false);
         applet->program_id = program_id;
