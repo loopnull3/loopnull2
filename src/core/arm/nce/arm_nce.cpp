@@ -328,10 +328,18 @@ bool ArmNce::HandleTrappedInstruction(GuestContext* guest_ctx, u32 inst, void* r
     auto& thread_params = guest_ctx->parent->m_running_thread->GetNativeExecutionParameters();
     host_ctx.pc += 4;
 
+    // How many, and of which kind (a supervisor call leaves guest code and comes back by a
+    // signal, the costly one), for a report's log.
     static std::atomic<u64> trapped{};
+    static std::atomic<u64> trapped_calls{};
+    const bool is_call = NCE::SVC{inst}.Verify();
+    if (is_call) {
+        trapped_calls.fetch_add(1, std::memory_order_relaxed);
+    }
     if (const u64 count = trapped.fetch_add(1, std::memory_order_relaxed) + 1;
-        count == 1 || (count & 0x3ffff) == 0) {
-        LOG_INFO(Core_ARM, "NCE: {} patched instructions run by trap", count);
+        count == 1 || count == 1000 || count == 30000 || (count & 0x3ffff) == 0) {
+        LOG_INFO(Core_ARM, "NCE: {} patched instructions run by trap, {} of them supervisor calls",
+                 count, trapped_calls.load(std::memory_order_relaxed));
     }
 
     if (auto svc = NCE::SVC{inst}; svc.Verify()) {

@@ -3248,7 +3248,7 @@ void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
 }
 
 void RasterizerVulkan::TickFrame() {
-    if (static u64 frames{}; ++frames == 120 || frames == 1200) {
+    if (static u64 frames{}; ++frames == 1 || frames == 120 || frames == 1200) {
         LOG_INFO(Render_Vulkan, "Up to frame {}: {} draws ({} skipped), {} clears", frames,
                  g_counted_draws.load(std::memory_order_relaxed),
                  g_counted_draws_skipped.load(std::memory_order_relaxed),
