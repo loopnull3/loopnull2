@@ -169,6 +169,13 @@ void SwizzleImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const Ima
                                                           bool strict_size, bool broken_views,
                                                           bool native_bgr);
 
+/// Whether a new image and an overlap at the same address are one single-level 2D surface seen
+/// with and without multisampling (a multisampled target and the wider texture its samples are
+/// read through): the same blocks once both sizes are block aligned.
+[[nodiscard]] bool IsSameSurfaceAcrossSamples(const ImageInfo& new_info, GPUVAddr gpu_addr,
+                                              const ImageBase& overlap, bool broken_views,
+                                              bool native_bgr);
+
 [[nodiscard]] bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs);
 
 [[nodiscard]] std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate,

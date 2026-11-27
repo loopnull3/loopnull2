@@ -3166,6 +3166,25 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             join_copies_to_do.emplace_back(JoinCopy{false, overlap_id});
             return;
         }
+        if (IsSameSurfaceAcrossSamples(new_info, gpu_addr, overlap, broken_views, native_bgr)) {
+            // A multisampled target and the texture its samples are read through, twice as wide
+            // with one sample: no view spans them, and left as a bad overlap the texture never
+            // got what was drawn (Minecraft's 1.26.62 update resolves its 2x target with a draw
+            // that samples it so; its picture was black). Joined, the copy below carries the
+            // samples over.
+            static std::atomic<u32> logged{};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
+                LOG_INFO(HW_GPU,
+                         "A {}x{} image of {} samples takes over the {}x{} one of {} at {:#x}: one "
+                         "surface, with and without multisampling",
+                         new_info.size.width, new_info.size.height, new_info.num_samples,
+                         overlap.info.size.width, overlap.info.size.height,
+                         overlap.info.num_samples, gpu_addr);
+            }
+            join_overlap_ids.push_back(overlap_id);
+            join_copies_to_do.emplace_back(JoinCopy{false, overlap_id});
+            return;
+        }
         constexpr auto options = RelaxedOptions::Size | RelaxedOptions::Format;
         const ImageBase new_image_base(new_info, gpu_addr, cpu_addr);
         if (IsSubresource(new_info, overlap, gpu_addr, options, broken_views, native_bgr)) {
@@ -3459,6 +3478,19 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const u32 down_shift = can_rescale ? resolution.down_shift : 0;
             auto copies = MakeShrinkImageCopies(new_info, overlap.info, base, up_scale, down_shift);
             if (overlap.info.num_samples != new_image.info.num_samples) {
+                // Not past what the overlap holds: the two may differ in the rows a height was
+                // aligned by (IsSameSurfaceAcrossSamples).
+                const auto [samples_x, samples_y] = SamplesLog2(new_image.info.num_samples);
+                const u32 width = (std::min)(new_info.size.width, overlap.info.size.width);
+                const u32 height = (std::min)(new_info.size.height, overlap.info.size.height);
+                for (ImageCopy& copy : copies) {
+                    copy.extent.width = (std::min)(
+                        copy.extent.width,
+                        (std::max)<u32>(((width >> samples_x) * up_scale) >> down_shift, 1));
+                    copy.extent.height = (std::min)(
+                        copy.extent.height,
+                        (std::max)<u32>(((height >> samples_y) * up_scale) >> down_shift, 1));
+                }
                 runtime.CopyImageMSAA(new_image, overlap, copies);
             } else {
                 runtime.CopyImage(new_image, overlap, copies);

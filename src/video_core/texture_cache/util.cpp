@@ -1600,6 +1600,25 @@ std::optional<OverlapResult> ResolveOverlap(const ImageInfo& new_info, GPUVAddr 
     return ResolveOverlapLeftAddress(new_info, gpu_addr, cpu_addr, overlap, strict_size);
 }
 
+bool IsSameSurfaceAcrossSamples(const ImageInfo& new_info, GPUVAddr gpu_addr,
+                                const ImageBase& overlap, bool broken_views, bool native_bgr) {
+    const ImageInfo& info = overlap.info;
+    if (gpu_addr != overlap.gpu_addr || new_info.num_samples == info.num_samples) {
+        return false;
+    }
+    if (new_info.type != ImageType::e2D || info.type != ImageType::e2D ||
+        new_info.resources.levels != 1 || info.resources.levels != 1 ||
+        new_info.resources.layers != 1 || info.resources.layers != 1) {
+        return false;
+    }
+    if (!IsViewCompatible(info.format, new_info.format, broken_views, native_bgr)) {
+        return false;
+    }
+    // Both sizes count samples, and a target's height may be the aligned one where the texture's
+    // is not (2560x768 and 2560x720).
+    return IsBlockLinearSizeCompatible(new_info, info, 0, 0, false);
+}
+
 bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs) {
     // If either of the layer strides is zero, we can assume they are compatible
     // These images generally come from rendertargets
