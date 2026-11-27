@@ -1,18 +1,20 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 3e47e324..8fdad6cc 100644
+index 3e47e324..5b543840 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
-@@ -2854,6 +2854,20 @@ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int stor
+@@ -2854,6 +2854,22 @@ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int stor
      if (l0 >= im->levels || a0 >= im->layers) return VK_NULL_HANDLE;
      if (l0 + nl > im->levels) nl = im->levels - l0;
      if (a0 + na > im->layers) na = im->layers - a0;
 +    // RADV on Xclipse (measured on a Galaxy S26 with the copy audit, Hokkaido): what the driver writes into a level of an ASTC image through its non-block-compressed
 +    // view (astc_reach_levels) the sampler does not find. Such a level samples as the error colour (no ASTC data where the sampler reads) or as other content, while a
-+    // copy out of it returns the blocks written: a 1024x384 texture's level 5, a 746x746 one's level 6, 124 of 684 sampled levels (117 of 218 textures) in one run of
-+    // Mario Kart World, 95 of them wholly the error colour, every one named by the rule (which also names 34 that sample right). A sampled view ends before the first
-+    // such level: the level before it is sampled in its place, so a far flag or road marking is a little sharper than it should be and not magenta.
++    // copy out of it returns the blocks written: a 1024x384 texture's level 5, a 746x746 one's level 6, 1068 of 2155 sampled levels (859 of 1152 textures) in a run of
++    // Mario Kart World, 561 of them wholly the error colour, all but two named by the rule (which also names 68 that sample right). Blocks larger than 4x4 only: the
++    // audit's 256x384 ASTC 8x8 and 192x288 ASTC 6x6 textures have level 5 as the error colour and its two blocks in place of two of level 4's, while the same block counts as
++    // BC3 and as ASTC 4x4 are right at every level. A sampled view ends before the first such level: the level before it is sampled in its place, so a far flag or
++    // road marking is a little sharper than it should be and not magenta.
 +    // DM_VK_ASTC_LEVEL_CAP: 0 off, 1 with any driver (default: with RADV)
-+    if (!storage && is_astc(im->f.vk)) {
++    if (!storage && is_astc(im->f.vk) && (im->f.bw > 4 || im->f.bh > 4)) {
 +        int on = VKA_ENV("DM_VK_ASTC_LEVEL_CAP", -1); uint32_t cap = (on < 0 ? V.driver_id == VK_DRIVER_ID_MESA_RADV : on) ? astc_reach_levels(im) : im->levels;
 +        if (cap < im->levels && l0 + nl > cap) {
 +            static _Atomic int n; if (atomic_fetch_add(&n, 1) < 32) VLOG("ASTC texture serial %llu %ux%u x%u format %#x: sampled through its first %u of %u levels (the driver's writes into the others are not where its sampler reads: DM_VK_ASTC_LEVEL_CAP)",

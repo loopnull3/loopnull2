@@ -120,19 +120,26 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
     padding) >> level, 1)` is less than its block count. The rule names 34 more levels that
     sample right: in larger textures (level 6 of 1024x768), whose padding may be wider, and a
     few where that view is right (level 5 of a 51x819 texture, whose level 6 is wrong). A
-    texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
-  - the audit's own test textures (`mip check`) all came back right: none was of a size that
-    reaches that view. It now has three of the game's sizes (256x384, 1024x768 and 51x819
-    ASTC 8x8) and the first one's block counts as BC3, ASTC 4x4 and ASTC 6x6. Mesa asks
-    addrlib for that view of every 16-byte block as BC3's, which has 4x4 texels a block: a
-    reading of Mesa's source, which the three formats put to the test on the phone;
+    texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance.
+    A second run, with the fix below on: 1068 of 2155 sampled levels, in 859 of 1152 textures,
+    561 of them wholly the error colour; the rule names 1066 (and 68 that sample right). The
+    other two are levels 5 and 6 of a 1434x1434 array of 46 layers;
+  - the audit's own test textures (`mip check`) say which blocks. Of three of the game's sizes
+    as ASTC 8x8, 256x384 has level 5 as the error colour, 51x819 levels 5 and 6, and 1024x768
+    is right at every level. With 256x384's block counts, ASTC 6x6 (192x288) fails the same
+    way and BC3 and ASTC 4x4 (128x192) are right at every level. What is written to such a
+    level lands a level up: two of level 4's six blocks hold level 5's two. Mesa asks addrlib for
+    that view of every 16-byte block as BC3's, which has 4x4 texels a block (a reading of
+    Mesa's source): right for BC3 and ASTC 4x4, a level off for larger blocks;
   - the game copies texture to texture only, and fills every layer of a terrain array, at
     every level, from one texture (serial 130 or 132) before the tiles' own textures follow.
 
   The fix under test (`native_patches/0006-radv-astc-level-cap.patch`): with RADV a sampled
-  view of an ASTC image ends before its first such level, so the level before it is drawn in its
-  place (`DM_VK_ASTC_LEVEL_CAP=0` in Diagnostic switches turns it off). It has not run on a
-  phone. Still open: a few ASTC images hold only zero bytes and sample magenta, and the
+  view of an ASTC image of blocks larger than 4x4 ends before its first such level, so the level
+  before it is drawn in its place (`DM_VK_ASTC_LEVEL_CAP=0` in Diagnostic switches turns it
+  off). It ran on an S26: the log shows the views cut, and what the screen showed is not
+  reported yet. Still open: the level drawn in its place has its first blocks overwritten by
+  the next level's upload; a few ASTC images hold only zero bytes and sample magenta, and the
   terrain arrays' first fill is (1, 0, 1), which may be data and no colour. Tried and taken
   out: soft textures, dense images for the sparse ASTC arrays, cleaning buffer copies (the game
   makes none), illegal void extents (the game has none), and a CPU copy for levels of sizes
