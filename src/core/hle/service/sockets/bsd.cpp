@@ -2705,10 +2705,11 @@ std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyFileDescriptor(s32 fd, u64* 
     return *descriptor;
 }
 
-std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyDescriptor(s32 fd) {
+std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyDescriptor(s32 fd, const char* call) {
     auto descriptor = CopyFileDescriptor(fd);
     if (descriptor && !descriptor->socket) {
-        LOG_ERROR(Service, "File descriptor handle={} is an eventfd, not a socket", fd);
+        LOG_ERROR(Service, "File descriptor handle={} is an eventfd, not a socket (in {})", fd,
+                  call);
         return std::nullopt;
     }
     return descriptor;
