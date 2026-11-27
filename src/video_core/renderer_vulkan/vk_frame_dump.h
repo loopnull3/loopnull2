@@ -154,6 +154,8 @@ public:
     /// Returns true when copies were recorded, which ends the current render pass.
     bool BeginPass(const void* framebuffer, std::span<ImageView* const> colors);
     void NoteDraw(std::span<const u64> shader_hashes);
+    /// A manifest line for the draw NoteDraw just counted: `state` is a list of JSON members.
+    void NoteDrawState(std::string_view state);
     /// Captures the current pass; returns true when copies were recorded.
     bool EndPass();
     void CaptureDispatch(u64 shader_hash, std::span<ImageView* const> written);

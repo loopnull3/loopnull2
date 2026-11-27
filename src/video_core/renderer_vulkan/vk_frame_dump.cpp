@@ -560,6 +560,16 @@ void FrameDump::NoteDraw(std::span<const u64> shader_hashes) {
     }
 }
 
+void FrameDump::NoteDrawState(std::string_view state) {
+    // A line for each of a frame's first draws: enough for a menu, not thousands in a world.
+    constexpr u32 MaxDraws = 256;
+    if (draws > MaxDraws) {
+        return;
+    }
+    Enqueue({.tags = fmt::format(R"({{"kind":"draw","pass":{},"draw":{},{}}})", pass_index,
+                                 draws - 1, state)});
+}
+
 bool FrameDump::EndPass() {
     if (!pass_framebuffer) {
         return false;

@@ -1093,6 +1093,26 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     if (frame_dump.Capturing()) {
         FrameDumpPass(texture_cache.GetFramebuffer());
         frame_dump.NoteDraw(pipeline->ShaderHashes());
+        {
+            // What the draw is: a cube of 36 vertices and a full-screen triangle sample alike.
+            const auto& regs = maxwell3d->regs;
+            const auto& draw = maxwell3d->draw_manager.draw_state;
+            const auto& viewport = regs.viewport_transform[0];
+            const auto& scissor = regs.scissor_test[0];
+            frame_dump.NoteDrawState(fmt::format(
+                R"("indexed":{},"count":{},"instances":{},"topology":{},"cull":{},"cull_face":{},"front_face":{},"depth_test":{},"depth_write":{},"depth_func":{},"blend":{},"blend_color":[{},{}],"blend_alpha":[{},{}],"color_mask":{},"viewport_scale":[{},{},{}],"viewport_translate":[{},{},{}],"scissor":[{},{},{},{},{}])",
+                is_indexed, is_indexed ? draw.index_buffer.count : draw.vertex_buffer.count,
+                draw.instance_count, static_cast<u32>(draw.topology),
+                regs.gl_cull_test_enabled != 0, static_cast<u32>(regs.gl_cull_face),
+                static_cast<u32>(regs.gl_front_face), regs.depth_test_enable != 0,
+                regs.depth_write_enabled != 0, static_cast<u32>(regs.depth_test_func),
+                regs.blend.enable[0] != 0, static_cast<u32>(regs.blend.color_source),
+                static_cast<u32>(regs.blend.color_dest), static_cast<u32>(regs.blend.alpha_source),
+                static_cast<u32>(regs.blend.alpha_dest), regs.color_mask[0].raw, viewport.scale_x,
+                viewport.scale_y, viewport.scale_z, viewport.translate_x, viewport.translate_y,
+                viewport.translate_z, scissor.enable != 0, scissor.min_x.Value(),
+                scissor.max_x.Value(), scissor.min_y.Value(), scissor.max_y.Value()));
+        }
         bool recorded = false;
         if (frame_dump.CapturingSampled()) {
             boost::container::small_vector<FrameDump::Sampled, 16> sampled;
