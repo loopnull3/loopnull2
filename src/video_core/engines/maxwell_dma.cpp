@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include "common/algorithm.h"
 #include "common/assert.h"
@@ -144,30 +146,45 @@ void MaxwellDMA::Launch() {
             const auto dst_kind = memory_manager.GetPageKind(regs.offset_out);
             const bool is_src_pitch = IsPitchKind(src_kind);
             const bool is_dst_pitch = IsPitchKind(dst_kind);
+            if (is_src_pitch != is_dst_pitch) {
+                // Which copies take the conversion below, for a report's log (Minecraft's
+                // 1.26.62 update makes them with lengths that are no multiple of 16).
+                static std::atomic<u32> logged{};
+                if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    LOG_INFO(HW_GPU,
+                             "DMA copy between page kinds {:#x} and {:#x}: {} bytes, {:#x} to {:#x}",
+                             static_cast<u32>(src_kind), static_cast<u32>(dst_kind),
+                             regs.line_length_in, static_cast<GPUVAddr>(regs.offset_in),
+                             static_cast<GPUVAddr>(regs.offset_out));
+                }
+            }
+            // A length that is no multiple of 16 ends in part of a unit: only that part is
+            // copied, not 16 bytes past the length asked for.
             if (!is_src_pitch && is_dst_pitch) {
-                UNIMPLEMENTED_IF(regs.line_length_in % 16 != 0);
                 UNIMPLEMENTED_IF(regs.offset_in % 16 != 0);
                 UNIMPLEMENTED_IF(regs.offset_out % 16 != 0);
                 read_buffer.resize_destructive(16);
                 for (u32 offset = 0; offset < regs.line_length_in; offset += 16) {
+                    const u32 size = std::min<u32>(16, regs.line_length_in - offset);
                     Tegra::Memory::GpuGuestMemoryScoped<
                         u8, Tegra::Memory::GuestMemoryFlags::SafeReadCachedWrite>
                         tmp_write_buffer(memory_manager,
                                          convert_linear_2_blocklinear_addr(regs.offset_in + offset),
-                                         16, &read_buffer);
-                    tmp_write_buffer.SetAddressAndSize(regs.offset_out + offset, 16);
+                                         size, &read_buffer);
+                    tmp_write_buffer.SetAddressAndSize(regs.offset_out + offset, size);
                 }
             } else if (is_src_pitch && !is_dst_pitch) {
-                UNIMPLEMENTED_IF(regs.line_length_in % 16 != 0);
                 UNIMPLEMENTED_IF(regs.offset_in % 16 != 0);
                 UNIMPLEMENTED_IF(regs.offset_out % 16 != 0);
                 read_buffer.resize_destructive(16);
                 for (u32 offset = 0; offset < regs.line_length_in; offset += 16) {
+                    const u32 size = std::min<u32>(16, regs.line_length_in - offset);
                     Tegra::Memory::GpuGuestMemoryScoped<
                         u8, Tegra::Memory::GuestMemoryFlags::SafeReadCachedWrite>
-                        tmp_write_buffer(memory_manager, regs.offset_in + offset, 16, &read_buffer);
+                        tmp_write_buffer(memory_manager, regs.offset_in + offset, size,
+                                         &read_buffer);
                     tmp_write_buffer.SetAddressAndSize(
-                        convert_linear_2_blocklinear_addr(regs.offset_out + offset), 16);
+                        convert_linear_2_blocklinear_addr(regs.offset_out + offset), size);
                 }
             } else {
                 if (!accelerate.BufferCopy(regs.offset_in, regs.offset_out, regs.line_length_in)) {

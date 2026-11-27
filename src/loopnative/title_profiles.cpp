@@ -163,6 +163,12 @@ MemoryFit FitOf(float ram_need_gib, std::uint64_t usable_ram_bytes) {
 SessionPlan PlanSession(const DeviceTuning& tuning, std::uint64_t program_id) {
     SessionPlan plan;
     plan.start_fps_limit = tuning.start_fps_limit;
+    // The device defaults are sized for Switch 2 games (program ids 04...). A Switch game is a
+    // 720p or 1080p game these phones draw at 1x, and it keeps the user's settings: a Galaxy S26
+    // drew Minecraft at 0.5x with asynchronous shaders, and its 1.26.62 update showed no picture.
+    if ((program_id >> 56) != 0x04) {
+        return plan;
+    }
     AddDeviceDefaults(tuning, plan);
 
     plan.profile = FindTitleProfile(program_id);

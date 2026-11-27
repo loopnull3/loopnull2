@@ -137,10 +137,16 @@ void TestProfiles() {
     CHECK(pokopia.memory_fit == MemoryFit::Fits);
     CHECK(!pokopia.storage_backed_memory);
 
-    const auto unknown = PlanSession(tuning, 0x0100000000010000ULL);
+    const auto unknown = PlanSession(tuning, 0x0400000000010000ULL);
     CHECK(unknown.profile == nullptr);
     CHECK(HasOverride(unknown, "resolution_setup", "1"));
     CHECK(!unknown.storage_backed_memory);
+
+    // A Switch game (Minecraft) keeps the user's settings.
+    const auto switch_game = PlanSession(tuning, 0x0100D71004694000ULL);
+    CHECK(switch_game.profile == nullptr);
+    CHECK(switch_game.overrides.empty());
+    CHECK(!switch_game.storage_backed_memory);
 
     // No key appears twice: the title's value replaces the device default.
     for (std::size_t i = 0; i < kart.overrides.size(); ++i) {
@@ -250,9 +256,12 @@ void TestS26() {
     CHECK(HasOverride(emblem, "resolution_setup", "1"));
     CHECK(emblem.memory_fit == MemoryFit::Fits);
 
-    const auto unknown = PlanSession(tuning, 0x0100000000010000ULL);
+    const auto unknown = PlanSession(tuning, 0x0400000000010000ULL);
     CHECK(HasOverride(unknown, "resolution_setup", "1"));
     CHECK(HasOverride(unknown, "scaling_filter", "6"));
+
+    const auto switch_game = PlanSession(tuning, 0x0100D71004694000ULL);
+    CHECK(switch_game.overrides.empty());
 
     const auto json = ToJson(tuning, kart);
     CHECK(json.find("\"device_class\":\"galaxy_s26_exynos\"") != std::string::npos);

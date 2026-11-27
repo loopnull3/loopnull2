@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -753,8 +754,16 @@ bool RasterizerVulkan::TryNx2IndirectReset(bool is_indexed, u32 instance_count) 
     return true;
 }
 
+namespace {
+// For a report of a black picture: whether the game draws at all (logged by TickFrame).
+std::atomic<u64> g_counted_draws{};
+std::atomic<u64> g_counted_draws_skipped{};
+std::atomic<u64> g_counted_clears{};
+} // namespace
+
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_indirect) {
+    g_counted_draws.fetch_add(1, std::memory_order_relaxed);
 
     if (Common::DkbFrameTrace::Enabled()) {
         ++trace_draws;
@@ -799,6 +808,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
     }
 
     const auto report_failure = [&](std::string_view reason) {
+        g_counted_draws_skipped.fetch_add(1, std::memory_order_relaxed);
         TraceDrawFailure(reason);
         static std::set<std::tuple<u64, u64, std::string_view>> seen;
         const auto& regs = maxwell3d->regs;
@@ -1919,6 +1929,7 @@ bool RasterizerVulkan::ClearVolumeSlices(const Framebuffer* framebuffer, u32 fir
 }
 
 void RasterizerVulkan::Clear(u32 layer_count) {
+    g_counted_clears.fetch_add(1, std::memory_order_relaxed);
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Clear};
     if (frameskip_active && FrameskipTargetsRepeat() && frame_clears_skipped) {
         return;
@@ -3237,6 +3248,12 @@ void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
 }
 
 void RasterizerVulkan::TickFrame() {
+    if (static u64 frames{}; ++frames == 120 || frames == 1200) {
+        LOG_INFO(Render_Vulkan, "Up to frame {}: {} draws ({} skipped), {} clears", frames,
+                 g_counted_draws.load(std::memory_order_relaxed),
+                 g_counted_draws_skipped.load(std::memory_order_relaxed),
+                 g_counted_clears.load(std::memory_order_relaxed));
+    }
     if (VideoCore::Nx2Debug::HasRequests()) {
         if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
             frame_dump.Arm(std::move(capture->directory), capture->sampled, capture->buffers,
@@ -3542,6 +3559,32 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
         LOG_INFO(HW_GPU, "Native display source: address={:#x}, offset={:#x}, dimensions={}x{}, stride={}, accelerated={}, mask={:#x}",
                  framebuffer_addr, config.offset, config.width, config.height, pixel_stride,
                  image_view != nullptr, config.layer_stack_mask);
+    }
+    {
+        // What is shown, at the first frame and whenever it changes: a black picture with sound is
+        // either a frame the texture cache does not hold (shown from guest memory) or a game
+        // that drew black.
+        struct Source {
+            DAddr address;
+            u32 width, height, format;
+            bool cached;
+            bool operator==(const Source&) const = default;
+        };
+        static Source last{};
+        static u32 logged{};
+        const Source now{framebuffer_addr, config.width, config.height,
+                         static_cast<u32>(config.pixel_format), image_view != nullptr};
+        if (logged < 24 && (logged == 0 || now != last)) {
+            ++logged;
+            last = now;
+            LOG_INFO(HW_GPU,
+                     "Display source: address={:#x} {}x{} stride={} format={}, {}", framebuffer_addr,
+                     config.width, config.height, pixel_stride, now.format,
+                     image_view != nullptr
+                         ? fmt::format("the texture cache's {}x{} image", image_view->size.width,
+                                       image_view->size.height)
+                         : std::string{"not in the texture cache: read from guest memory"});
+        }
     }
     if (!image_view) {
         return {};
