@@ -469,6 +469,10 @@ private:
 
     void RefreshContents(Image& image, ImageId image_id);
 
+    /// Debug knob 1: the bytes guest memory holds for each layer of a cube or a small array as
+    /// it is uploaded.
+    void LogLayeredUpload(const Image& image);
+
     /// Upload data from guest to an image
     template <typename StagingBuffer>
     void UploadImageContents(Image& image, StagingBuffer& staging_buffer);

@@ -431,11 +431,31 @@ std::optional<std::pair<GPUVAddr, u32>> SampledKey(const FrameDump::Sampled& tex
 bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string name,
                               std::string tags) {
     tags += SamplerJson(texture.sampler);
-    if (const auto target = MakeTarget(*texture.view, index)) {
-        return Record(*target, std::move(name), std::move(tags));
-    }
     const Image& image = *texture.view->BackingImage();
     const auto& info = image.info;
+    const auto& range = texture.view->range;
+    // The image behind the view and how much of it the view shows: a cube or an array has more
+    // layers than the first one.
+    tags += fmt::format(
+        R"(,"image":{{"type":{},"levels":{},"layers":{},"layer_stride":{},"flags":{}}},"view":{{"type":{},"levels":{},"layers":{}}})",
+        static_cast<u32>(info.type), info.resources.levels, info.resources.layers,
+        info.layer_stride, static_cast<u32>(image.flags), static_cast<u32>(texture.view->type),
+        range.extent.levels, range.extent.layers);
+    if (const auto target = MakeTarget(*texture.view, index)) {
+        bool recorded = Record(*target, name, tags);
+        // Every layer of a cube or a small array (Minecraft's title background showed one face of
+        // six).
+        constexpr s32 MaxLayers = 8;
+        if (info.type != VideoCommon::ImageType::e3D && range.extent.layers > 1 &&
+            range.extent.layers <= MaxLayers) {
+            for (s32 layer = 1; layer < range.extent.layers; ++layer) {
+                Target other = *target;
+                other.layer += layer;
+                recorded |= Record(other, fmt::format("{}_layer{}", name, layer), tags);
+            }
+        }
+        return recorded;
+    }
     Enqueue({.tags = fmt::format(
                  R"({{"name":"{}",{},"format":"{}","width":{},"height":{},"depth":{},"type":{},"gpu_addr":"{:#x}","skipped":"format"}})",
                  name, tags, info.format, info.size.width, info.size.height, info.size.depth,

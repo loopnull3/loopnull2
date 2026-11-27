@@ -2131,6 +2131,24 @@ ImageId TextureCache<P>::DmaImageId(const Tegra::DMA::ImageOperand& operand, boo
         return NULL_IMAGE_ID;
     }
     auto& image = slot_images[dst_id];
+    if (is_upload && Settings::GetDebugKnobAt(0) && image.info.type == ImageType::e2D &&
+        image.info.resources.layers >= 2 && image.info.resources.layers <= 16) {
+        // Debug knob 1: where a copy into a cube or a small array goes.
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 48) {
+            const auto found = image.TryFindBase(operand.address);
+            LOG_INFO(HW_GPU,
+                     "DMA copy of {}x{} to {:#x} finds the {}x{} image of {} layers at {:#x} "
+                     "(flags {:#x}): level {}, layer {}; {}",
+                     dst_info.size.width, dst_info.size.height, operand.address,
+                     image.info.size.width, image.info.size.height, image.info.resources.layers,
+                     image.gpu_addr, static_cast<u32>(image.flags), found ? found->level : -1,
+                     found ? found->layer : -1,
+                     True(image.flags & ImageFlagBits::GpuModified)
+                         ? "written into the host image"
+                         : "left to guest memory, which the image is uploaded from again");
+        }
+    }
     if (False(image.flags & ImageFlagBits::GpuModified)) {
         // No need to waste time on an image that's synced with guest
         return NULL_IMAGE_ID;
@@ -2249,6 +2267,34 @@ void TextureCache<P>::DownloadImageIntoBuffer(typename TextureCache<P>::Image* i
 }
 
 template <class P>
+void TextureCache<P>::LogLayeredUpload(const Image& image) {
+    const ImageInfo& info = image.info;
+    if (!Settings::GetDebugKnobAt(0) || info.type != ImageType::e2D ||
+        info.resources.layers < 2 || info.resources.layers > 16 || info.layer_stride == 0) {
+        return;
+    }
+    static std::atomic<u32> logged{};
+    if (logged.fetch_add(1, std::memory_order_relaxed) >= 24) {
+        return;
+    }
+    const size_t bytes = (std::min<size_t>)(info.layer_stride, 8_MiB);
+    std::vector<u8> data(bytes);
+    std::string layers;
+    for (s32 layer = 0; layer < info.resources.layers; ++layer) {
+        gpu_memory->ReadBlockUnsafe(image.gpu_addr + static_cast<u64>(layer) * info.layer_stride,
+                                    data.data(), bytes);
+        const size_t zeros = static_cast<size_t>(std::count(data.begin(), data.end(), u8{0}));
+        layers += fmt::format("{}{}", layer == 0 ? "" : " ", bytes - zeros);
+    }
+    LOG_INFO(HW_GPU,
+             "Upload of the {}x{} image of {} layers and {} levels (format {}, flags {:#x}) at "
+             "{:#x}, layer stride {:#x}: bytes not zero in the first {:#x} of each layer: {}",
+             info.size.width, info.size.height, info.resources.layers, info.resources.levels,
+             static_cast<u32>(info.format), static_cast<u32>(image.flags), image.gpu_addr,
+             info.layer_stride, bytes, layers);
+}
+
+template <class P>
 void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
     if (False(image.flags & ImageFlagBits::CpuModified)) {
         // Only upload modified images
@@ -2262,6 +2308,7 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
     if (False(image.flags & ImageFlagBits::Tracked)) {
         TrackImage(image, image_id);
     }
+    LogLayeredUpload(image);
 
     // Made where a dropped GPU-written image left stale bytes (MarkStale): nothing to upload.
     // Pages the buffer cache wrote on the GPU may hold data written back since: upload those.
@@ -3139,8 +3186,31 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     join_copies_to_do.clear();
     join_alias_indices.clear();
     const bool this_is_linear = info.type == ImageType::Linear;
+    // Debug knob 1: the images found where a cube or a small array is made, or an image over one.
+    const auto is_layered = [](const ImageInfo& candidate) {
+        return candidate.type == ImageType::e2D && candidate.resources.layers >= 2 &&
+               candidate.resources.layers <= 16;
+    };
+    static std::atomic<u32> logged_overlaps{};
+    const auto note_overlap = [&](const ImageBase& overlap, const char* outcome) {
+        if (!Settings::GetDebugKnobAt(0) || (!is_layered(info) && !is_layered(overlap.info)) ||
+            logged_overlaps.fetch_add(1, std::memory_order_relaxed) >= 64) {
+            return;
+        }
+        LOG_INFO(HW_GPU,
+                 "New {}x{} image of {} layers, {} levels and {} samples (format {}) at {:#x}, "
+                 "layer stride {:#x}: the {}x{} one of {} layers, {} levels and {} samples (format "
+                 "{}, flags {:#x}) at {:#x}, layer stride {:#x}, is {}",
+                 info.size.width, info.size.height, info.resources.layers, info.resources.levels,
+                 info.num_samples, static_cast<u32>(info.format), gpu_addr, info.layer_stride,
+                 overlap.info.size.width, overlap.info.size.height, overlap.info.resources.layers,
+                 overlap.info.resources.levels, overlap.info.num_samples,
+                 static_cast<u32>(overlap.info.format), static_cast<u32>(overlap.flags),
+                 overlap.gpu_addr, overlap.info.layer_stride, outcome);
+    };
     const auto region_check = [&](ImageId overlap_id, ImageBase& overlap) {
         if (True(overlap.flags & ImageFlagBits::Remapped)) {
+            note_overlap(overlap, "remapped and dropped");
             join_ignore_textures.insert(overlap_id);
             return;
         }
@@ -3160,6 +3230,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         const std::optional<OverlapResult> solution = ResolveOverlap(
             new_info, gpu_addr, cpu_addr, overlap, strict_size, broken_views, native_bgr);
         if (solution) {
+            note_overlap(overlap, True(overlap.flags & ImageFlagBits::GpuModified)
+                                      ? "joined, its content copied over the upload"
+                                      : "joined, its content dropped");
             gpu_addr = solution->gpu_addr;
             cpu_addr = solution->cpu_addr;
             new_info.resources = solution->resources;
@@ -3191,15 +3264,18 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         constexpr auto options = RelaxedOptions::Size | RelaxedOptions::Format;
         const ImageBase new_image_base(new_info, gpu_addr, cpu_addr);
         if (IsSubresource(new_info, overlap, gpu_addr, options, broken_views, native_bgr)) {
+            note_overlap(overlap, "an alias (the new image is a part of it)");
             join_left_aliased_ids.push_back(overlap_id);
             overlap.flags |= ImageFlagBits::Alias;
             join_copies_to_do.emplace_back(JoinCopy{true, overlap_id});
         } else if (IsSubresource(overlap.info, new_image_base, overlap.gpu_addr, options,
                                  broken_views, native_bgr)) {
+            note_overlap(overlap, "an alias (a part of the new image)");
             join_right_aliased_ids.push_back(overlap_id);
             overlap.flags |= ImageFlagBits::Alias;
             join_copies_to_do.emplace_back(JoinCopy{true, overlap_id});
         } else {
+            note_overlap(overlap, "a bad overlap: both kept, nothing copied");
             join_bad_overlap_ids.push_back(overlap_id);
         }
     };

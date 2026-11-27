@@ -285,8 +285,10 @@ effect the next time the app starts. The available switches are listed in
 A wrong picture needs no file: set Settings, Debug, "Debug knobs" to 1 and play for half a
 minute. Frames 300 and 1500 of the session are captured, and the log gets a `Frame dump:` line
 for every pass, every texture a pass samples and the image shown, with each one's size, format
-and lowest, highest and mean values. Set it back to 0 afterwards: a capture stalls the game for
-a moment.
+and lowest, highest and mean values. A cube or a small array is read layer by layer, and for
+those of 2 to 16 layers the log also says what guest memory held for each layer at every upload,
+which images were found where one was made, and where DMA copies into one went. Set it back to
+0 afterwards: a capture stalls the game for a moment.
 
 ## Building
 
