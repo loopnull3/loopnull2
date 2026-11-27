@@ -97,6 +97,25 @@ void MaxwellDMA::Launch() {
     const LaunchDMA& launch = regs.launch_dma;
     ASSERT(launch.interrupt_type == LaunchDMA::InterruptType::NONE);
 
+    if (launch.data_transfer_type == LaunchDMA::DataTransferType::NONE) {
+        // No data is transferred: such a launch only releases the semaphore (NVIDIA's own driver
+        // releases copy engine semaphores this way, uvm_turing_ce.c), and the offsets are what an
+        // earlier copy or fill left. Copied anyway, it read from address 0 over the bytes a fill
+        // had just written (Minecraft's 1.26.62 update, every frame).
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
+            LOG_INFO(HW_GPU,
+                     "DMA launch without a data transfer: launch {:#x}, semaphore type {} at {:#x} "
+                     "payload {:#x}; offsets left at {:#x} and {:#x}, {} units",
+                     regs.reg_array[0xc0], static_cast<u32>(launch.semaphore_type.Value()),
+                     static_cast<GPUVAddr>(regs.semaphore.address), regs.semaphore.payload,
+                     static_cast<GPUVAddr>(regs.offset_in), static_cast<GPUVAddr>(regs.offset_out),
+                     regs.line_length_in);
+        }
+        ReleaseSemaphore();
+        return;
+    }
+
     if (launch.multi_line_enable) {
         const bool is_src_pitch = launch.src_memory_layout == LaunchDMA::MemoryLayout::PITCH;
         const bool is_dst_pitch = launch.dst_memory_layout == LaunchDMA::MemoryLayout::PITCH;
@@ -173,11 +192,11 @@ void MaxwellDMA::Launch() {
                     const auto& remap = regs.remap_const;
                     LOG_INFO(HW_GPU,
                              "DMA copy between page kinds {:#x} and {:#x}: {} bytes, {:#x} to "
-                             "{:#x}; remap {} of {} to {} components of {} bytes (x {} y {} z {} "
-                             "w {}), constants {:#x} {:#x}",
+                             "{:#x}, launch {:#x}; remap {} of {} to {} components of {} bytes (x "
+                             "{} y {} z {} w {}), constants {:#x} {:#x}",
                              static_cast<u32>(src_kind), static_cast<u32>(dst_kind),
                              regs.line_length_in, static_cast<GPUVAddr>(regs.offset_in),
-                             static_cast<GPUVAddr>(regs.offset_out),
+                             static_cast<GPUVAddr>(regs.offset_out), regs.reg_array[0xc0],
                              regs.launch_dma.remap_enable != 0 ? "on" : "off",
                              remap.num_src_components_minus_one + 1,
                              remap.num_dst_components_minus_one + 1,
