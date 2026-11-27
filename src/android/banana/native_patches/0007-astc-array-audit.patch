@@ -1,0 +1,284 @@
+diff --git a/dm/gfx/vk_android/vka_nanscan.c b/dm/gfx/vk_android/vka_nanscan.c
+index 3817e39c..02ea6f36 100644
+--- a/dm/gfx/vk_android/vka_nanscan.c
++++ b/dm/gfx/vk_android/vka_nanscan.c
+@@ -203,14 +203,29 @@ void vka_astc_probe(VkCommandBuffer cb, uint64_t fence) {
+ // level 5 the S26 sampled as the error colour in the game; 1024x768, whose level 6 vka_block_reach names and the S26 sampled right; 51x819, level 5 right and level 6
+ // wrong there. And the 32x48 blocks of the first as BC3, ASTC 4x4 and ASTC 6x6: Mesa's ac_surface_compute_nbc_view asks addrlib for the view of a 16-byte block as
+ // BC3's, 4x4 texels a block, which another block size is not
+-enum { MP_REC = 640, MP_OUT = 12 << 20, MP_BLK = 512 << 10, MP_STORE = 4 << 20 };
+-typedef struct { int fmt; uint32_t bw, bh, w, h, layers, levels; const char *name; uint32_t from; } mp_shape;
++// Arrays of many layers, the last seven: Mario Kart World's 1024x1024 x46 ASTC 8x8 texture (as its image is made here, without its finest level) held all-zero blocks
++// at every level of 64x64 texels or less on the S26, in all 46 layers, and its 1434x1434 x46 one some at two levels, while single textures of those sizes and the
++// 68-layer atlases its copies fill were right. Every level of every layer is uploaded, as a texture's are; the levels from `check` on are looked at in every
++// `lstep`th layer and the last one, the levels from `wide` up to there in the first and last layers only (a level of 256x256 texels is 1 MiB of samples a layer),
++// and `one` leaves out the image copies are made into. With 14 and 28 layers for where it starts (no multiple of 6: a square image of whole cubes is made
++// cube-compatible, which the game's 46 layers are not), and the same block counts as BC3 and ASTC 4x4
++enum { MP_REC = 2048, MP_OUT = 28 << 20, MP_UP = 2 << 20, MP_BLK = 1 << 20, MP_STORE = 48 << 20 };
++typedef struct { int fmt; uint32_t bw, bh, w, h, layers, levels; const char *name; uint32_t from, check, lstep, wide, one; } mp_shape;
+ static const mp_shape g_mps[] = {
+     {0x80, 8, 8, 128, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 4, 4, "ASTC 8x8"}, {0x80, 8, 8, 85, 128, 1, 8, "ASTC 8x8"}, {0x80, 8, 8, 119, 128, 1, 8, "ASTC 8x8"},
+     {0x80, 8, 8, 128, 48, 4, 6, "ASTC 8x8"}, {0x80, 8, 8, 104, 127, 1, 7, "ASTC 8x8"}, {0x79, 4, 4, 85, 128, 1, 8, "ASTC 4x4"}, {0x44, 4, 4, 85, 128, 1, 8, "BC3"},
+     {0x80, 8, 8, 256, 384, 1, 9, "ASTC 8x8", 2}, {0x44, 4, 4, 128, 192, 1, 8, "BC3", 1}, {0x80, 8, 8, 1024, 768, 1, 11, "ASTC 8x8", 4},
+     {0x79, 4, 4, 128, 192, 1, 8, "ASTC 4x4", 1}, {0x7d, 6, 6, 192, 288, 1, 9, "ASTC 6x6", 2}, {0x80, 8, 8, 51, 819, 1, 10, "ASTC 8x8", 3},
++    {0x80, 8, 8, 512, 512, 46, 10, "ASTC 8x8", 0, 3, 5, 1}, {0x80, 8, 8, 717, 717, 46, 10, "ASTC 8x8", 0, 4, 5, 0, 1}, {0x80, 8, 8, 512, 512, 14, 10, "ASTC 8x8", 0, 3, 13},
++    {0x80, 8, 8, 512, 512, 28, 10, "ASTC 8x8", 0, 3, 27}, {0x44, 4, 4, 256, 256, 46, 9, "BC3", 0, 3, 15, 0, 1}, {0x79, 4, 4, 256, 256, 46, 9, "ASTC 4x4", 0, 3, 15, 0, 1},
+ };
++// Whether the check looks at level lv of layer ly of a shape
++static int mp_looks(const mp_shape *s, uint32_t lv, uint32_t ly) {
++    uint32_t c = s->check > s->from ? s->check : s->from;
++    if (lv < s->from) return 0;
++    if (lv >= c) return !s->lstep || ly % s->lstep == 0 || ly == s->layers - 1;
++    return s->wide && lv >= s->wide && (ly == 0 || ly == s->layers - 1);
++}
+ enum { MP_N = sizeof g_mps / sizeof *g_mps };
+ typedef struct { uint8_t shape, img, level, layer; uint32_t w, h, bx, by; VkDeviceSize samp, rb; } mp_rec;   // samp: its texels in out (a vec4 each); rb: its blocks read back
+ static struct { vka_span out, up, rb; mp_rec r[MP_REC]; int n; } g_mp;
+@@ -231,10 +246,11 @@ static void mp_report(void *arg) {
+     for (unsigned si = 0; si < MP_N; si++) {
+         const mp_shape *s = &g_mps[si]; uint32_t bx0 = (s->w + s->bw - 1) / s->bw, by0 = (s->h + s->bh - 1) / s->bh;
+         for (uint32_t lv = 0; lv < s->levels; lv++) {
+-            uint32_t tot[2] = {0, 0}, sok[2] = {0, 0}, serr[2] = {0, 0}, rok[2] = {0, 0}, w = 0, h = 0, bx = 0, by = 0; char first[2][200] = {"", ""};
++            uint32_t tot[2] = {0, 0}, sok[2] = {0, 0}, serr[2] = {0, 0}, rok[2] = {0, 0}, ln = 0, lr = 0, w = 0, h = 0, bx = 0, by = 0; char first[2][200] = {"", ""};
+             for (int i = 0; i < g_mp.n; i++) {
+                 const mp_rec *r = &g_mp.r[i]; if (r->shape != si || r->level != lv) continue;
+                 const float *t = (const float *)(g_mp.out.ptr + r->samp); const uint8_t *rb = g_mp.rb.ptr + r->rb; w = r->w; h = r->h; bx = r->bx; by = r->by;
++                uint32_t before = sok[r->img], want = r->bx * r->by;
+                 for (uint32_t y = 0; y < r->by; y++) for (uint32_t x = 0; x < r->bx; x++) {
+                     uint8_t b[16]; float e[4]; mp_block(s, lv, r->layer, x, y, b, e);
+                     const float *v = t + 4 * ((size_t)(y * s->bh) * r->w + x * s->bw); int ok = 1;
+@@ -244,11 +260,13 @@ static void mp_report(void *arg) {
+                     if (!ok && !first[r->img][0]) snprintf(first[r->img], sizeof first[0], " (first wrong: layer %u block %u,%u samples (%.3f, %.3f, %.3f, %.3f), has (%.3f, %.3f, %.3f, %.3f))",
+                                                            r->layer, x, y, v[0], v[1], v[2], v[3], e[0], e[1], e[2], e[3]);
+                 }
++                if (!r->img) { ln++; lr += sok[0] - before == want; }   // (the uploaded image's layers looked at, and those wholly right)
+             }
+             if (!tot[0] && !tot[1]) continue;
+             int halves = (bx0 >> lv ? bx0 >> lv : 1) >= bx && (by0 >> lv ? by0 >> lv : 1) >= by, past = lv >= vka_block_reach(s->w, s->h, s->bw, s->bh, s->levels);
+-            VLOG("copy audit: mip check: %s %ux%u x%u level %u (%ux%u, %ux%u blocks%s%s): uploaded: %u of %u blocks sample right, %u as the error colour, %u read back right%s; copied from it: %u of %u sample right, %u as the error colour, %u read back right%s",
+-                 s->name, s->w, s->h, s->layers, lv, w, h, bx, by, halves ? "" : ", more than the first level's halved", past ? ", a level the rule for RADV's non-block-compressed view leaves out" : "",
++            char lay[64] = ""; if (s->layers > 4) snprintf(lay, sizeof lay, ", %u of its layers looked at, %u wholly right", ln, lr);
++            VLOG("copy audit: mip check: %s %ux%u x%u level %u (%ux%u, %ux%u blocks%s%s%s): uploaded: %u of %u blocks sample right, %u as the error colour, %u read back right%s; copied from it: %u of %u sample right, %u as the error colour, %u read back right%s",
++                 s->name, s->w, s->h, s->layers, lv, w, h, bx, by, halves ? "" : ", more than the first level's halved", past ? ", a level the rule for RADV's non-block-compressed view leaves out" : "", lay,
+                  sok[0], tot[0], serr[0], rok[0], first[0], sok[1], tot[1], serr[1], rok[1], first[1]);
+         }
+     }
+@@ -256,13 +274,14 @@ static void mp_report(void *arg) {
+ void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence) {
+     static int done; if (done) return;
+     done = 1;
+-    static uint8_t store[MP_STORE]; static tex_t tx[2 * MP_N]; size_t so = 0;   // (the textures' storage: zeros; their content is the copies below)
+-    if (!V.push_desc || !ready() || !vka_static(MP_OUT, V.sb_align, &g_mp.out) || !vka_static(MP_BLK, 16, &g_mp.up) || !vka_static(MP_BLK, 16, &g_mp.rb)) { VLOG("copy audit: mip check: not run (push descriptors or memory)"); return; }
++    static uint8_t *store; static tex_t tx[2 * MP_N]; size_t so = 0;   // (the textures' storage: zeros; their content is the copies below)
++    if (!store) store = calloc(1, MP_STORE);
++    if (!store || !V.push_desc || !ready() || !vka_static(MP_OUT, V.sb_align, &g_mp.out) || !vka_static(MP_UP, 16, &g_mp.up) || !vka_static(MP_BLK, 16, &g_mp.rb)) { VLOG("copy audit: mip check: not run (push descriptors or memory)"); return; }
+     memset(g_mp.out.ptr, 0, MP_OUT); memset(g_mp.rb.ptr, 0, MP_BLK);
+     VkDeviceSize uo = 0, oo = 0, ro = 0, al = V.sb_align > 16 ? V.sb_align : 16;
+     for (unsigned si = 0; si < MP_N; si++) {
+-        const mp_shape *s = &g_mps[si]; vka_img *ims[2] = {NULL, NULL}; int ok = 1;
+-        for (int k = 0; k < 2 && ok; k++) {
++        const mp_shape *s = &g_mps[si]; vka_img *ims[2] = {NULL, NULL}; int ok = 1, nim = s->one ? 1 : 2;
++        for (int k = 0; k < nim && ok; k++) {
+             tex_t *t = &tx[2 * si + k]; memset(t, 0, sizeof *t);
+             t->d.target = s->layers > 1 ? NVN_TEXTURE_TARGET_2D_ARRAY : NVN_TEXTURE_TARGET_2D; t->d.format = s->fmt; t->d.width = s->w; t->d.height = s->h; t->d.depth = s->layers; t->d.levels = s->levels;
+             nvn_tex_layout(&t->d, &t->L);
+@@ -273,23 +292,32 @@ void vka_astc_mip_probe(VkCommandBuffer cb, uint64_t fence) {
+             ok = ims[k] && ims[k]->levels == s->levels && ims[k]->layers == s->layers && !ims[k]->base && ims[k]->w == s->w && ims[k]->h == s->h;
+         }
+         if (!ok) { VLOG("copy audit: mip check: %s %ux%u x%u: no test texture", s->name, s->w, s->h, s->layers); continue; }
+-        vka_tex_own(ims[0], cb); vka_tex_own(ims[1], cb); vka_barrier(cb);
+-        for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as an upload
+-            uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
+-            if (uo + (VkDeviceSize)bx * by * 16 > MP_BLK) continue;
+-            for (uint32_t y = 0; y < by; y++) for (uint32_t x = 0; x < bx; x++) { float e[4]; mp_block(s, lv, ly, x, y, g_mp.up.ptr + uo + 16 * ((size_t)y * bx + x), e); }
+-            VkBufferImageCopy rg = {g_mp.up.off + uo, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
+-            vk.vkCmdCopyBufferToImage(cb, g_mp.up.buf, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+-            uo += (VkDeviceSize)bx * by * 16;
++        vka_tex_own(ims[0], cb); if (nim > 1) vka_tex_own(ims[1], cb);
++        vka_barrier(cb);
++        for (uint32_t lv = s->from; lv < s->levels; lv++) {   // as an upload
++            VkDeviceSize shared = ~(VkDeviceSize)0;   // (a layer the check does not look at takes the blocks of the level's first one)
++            for (uint32_t ly = 0; ly < s->layers; ly++) {
++                uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
++                VkDeviceSize at = shared;
++                if (mp_looks(s, lv, ly) || shared == ~(VkDeviceSize)0) {
++                    if (uo + (VkDeviceSize)bx * by * 16 > MP_UP) continue;
++                    for (uint32_t y = 0; y < by; y++) for (uint32_t x = 0; x < bx; x++) { float e[4]; mp_block(s, lv, ly, x, y, g_mp.up.ptr + uo + 16 * ((size_t)y * bx + x), e); }
++                    at = uo; uo += (VkDeviceSize)bx * by * 16;
++                    if (shared == ~(VkDeviceSize)0) shared = at;
++                }
++                VkBufferImageCopy rg = {g_mp.up.off + at, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
++                vk.vkCmdCopyBufferToImage(cb, g_mp.up.buf, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
++            }
+         }
+         vka_barrier(cb);   // (not marked GPU-written: nothing uploads these again, and the scan leaves them out)
+-        for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
++        for (uint32_t lv = s->from; nim > 1 && lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {   // as a game's copy
+             uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1;
+             VkImageCopy r = {{VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, {0, 0, 0}, {w, h, 1}};
+             vk.vkCmdCopyImage(cb, ims[0]->img, VK_IMAGE_LAYOUT_GENERAL, ims[1]->img, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+         }
+         vka_barrier(cb);
+-        for (int k = 0; k < 2; k++) for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
++        for (int k = 0; k < nim; k++) for (uint32_t lv = s->from; lv < s->levels; lv++) for (uint32_t ly = 0; ly < s->layers; ly++) {
++            if (!mp_looks(s, lv, ly)) continue;
+             uint32_t w = s->w >> lv ? s->w >> lv : 1, h = s->h >> lv ? s->h >> lv : 1, bx = (w + s->bw - 1) / s->bw, by = (h + s->bh - 1) / s->bh;
+             VkDeviceSize sn = (VkDeviceSize)w * h * 16, bn = (VkDeviceSize)bx * by * 16;
+             if (g_mp.n == MP_REC || oo + sn > MP_OUT || ro + bn > MP_BLK) continue;
+diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
+index 5b543840..ce37a21b 100644
+--- a/dm/gfx/vk_android/vka_tex.c
++++ b/dm/gfx/vk_android/vka_tex.c
+@@ -407,6 +407,8 @@ static _Thread_local int g_up_holes;   // the upload under way reads storage the
+ static int astc_fill(const vka_img *im, uint8_t *p, uint32_t lv, uint32_t ly, const uint8_t *prev);
+ static void astc_bad_note(const tex_t *t, uint32_t level, uint32_t layer, uint64_t bad, size_t n);
+ static int astc_keep(vka_img *im, uint32_t lv, uint64_t bad);
++static int is_astc(VkFormat v);
++static void ca_upload_note(const vka_img *im, const char *how, uint32_t copies, uint64_t bytes, uint32_t small, uint32_t zero);   // (the copy audit's, below)
+ static uint64_t g_rows_up;   // bytes of partial row re-uploads (upload_rows_tracked)
+ 
+ // ---------- Sparse textures: images of their mapped levels ----------
+@@ -1074,6 +1076,7 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+     im->stamp = nvn_dirty_now(); nvn_dirty_protect(t->mem, t->L.size);   // stamp, protect, then read (upload_tracked)
+     img_edges_take(im);
+     uint64_t up = 0;
++    int aud = vka_caud_on() && is_astc(f->vk) && im->layers >= 8; uint32_t a_n = 0, a_small = 0, a_zero = 0;
+     uint8_t *bst = NULL; uint32_t bst_cap = 0;
+     for (uint32_t lv = 0; lv < im->levels; lv++) {
+         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1;
+@@ -1104,8 +1107,10 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+                 vka_span s; if (!vka_scratch(sz, 16, &s)) { free(bst); return 0; }
+                 if (nvn_deswizzle_rows(d, tl, ly, t->mem, s.ptr - (size_t)y0 * pitch, pitch, y0, y1)) {
+                     VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target); free(bst); return 0; }
++                if (aud && (uint64_t)w * h <= 64 * 64) { a_small++; a_zero += !mem_any(s.ptr, sz); }
+                 uint64_t bad = astc_clean(f->vk, s.ptr, sz); astc_bad_note(t, tl, ly, bad, sz / 16);
+                 if (bad && astc_keep(im, lv, bad)) continue;   // (bands of a level: a whole band does not make the level whole)
++                a_n++;
+                 uint32_t py0 = y0 * f->bh, py1 = y1 * f->bh > h ? h : y1 * f->bh;
+                 VkBufferImageCopy cp = {s.off, bx * f->bw, (y1 - y0) * f->bh, {im->aspect, lv, ly, 1}, {0, (int32_t)py0, 0}, {w, py1 - py0, 1}};
+                 vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+@@ -1116,6 +1121,7 @@ static int upload_bands_tracked(vka_img *im, const tex_t *t, VkCommandBuffer cb,
+     }
+     free(bst);
+     atomic_fetch_add_explicit(&g_up_bytes, up, memory_order_relaxed);
++    if (aud) ca_upload_note(im, "the bands of its storage that changed", a_n, up, a_small, a_zero);
+     return 1;
+ }
+ // A zero texel block: zeros, except ASTC, whose all-zero block is a reserved mode (the error colour): a void-extent block of colour (0, 0, 0, 0) there
+@@ -2311,21 +2317,24 @@ cut:;
+     // A piece that could not be deswizzled ends the upload there, as on the serial path: the pieces before it are copied, it and those after it are not
+     if (fail) VRED_ONCE("texture serial %llu format %#x target %d: no CPU deswizzle", (unsigned long long)t->serial, d->format, d->target);
+     uint64_t bytes = 0;
++    int aud = vka_caud_on() && is_astc(f->vk) && im->layers >= 8; uint32_t a_n = 0, a_small = 0, a_zero = 0;
+     const uint8_t **prev = g_up_holes && is_astc(f->vk) && !is3d ? calloc(im->layers, sizeof *prev) : NULL;   // (the pieces' spans stay put through this loop)
+     for (uint32_t i = 0; i < k; i++) {
+         piece_t *q = &pc[i];
+         if (atomic_load(&q->bad)) break;
++        if (aud && (uint64_t)q->w * q->h <= 64 * 64) { a_small++; a_zero += !mem_any(q->s.ptr, q->pitch * q->by * q->z); }
+         int whole = prev && astc_fill(im, q->s.ptr, q->lv, q->ly, prev[q->ly]);
+         uint64_t bad = astc_clean(f->vk, q->s.ptr, q->pitch * q->by * q->z); astc_bad_note(t, q->lv + im->base, q->ly, bad, q->pitch * q->by * q->z / 16);
+         if (prev) prev[q->ly] = whole && !bad ? q->s.ptr : NULL;
+         if (astc_keep(im, q->lv, bad)) continue;
+         VkBufferImageCopy c = {q->s.off, q->bx * f->bw, q->by * f->bh, {im->aspect, q->lv, q->ly, 1}, {0, 0, 0}, {q->w, q->h, q->z}};
+         vk.vkCmdCopyBufferToImage(cb, q->s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+-        bytes += q->pitch * q->by * q->z;
++        bytes += q->pitch * q->by * q->z; a_n++;
+     }
+     free(prev);
+     free(pc);
+     *nbytes = bytes;
++    if (aud) ca_upload_note(im, k < npieces ? "its levels and layers, cut short (no staging memory)" : "all its levels and layers", a_n, bytes, a_small, a_zero);
+     return 1;
+ }
+ static int img_own(vka_img *im, VkCommandBuffer cb);
+@@ -2345,6 +2354,7 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+     // A sparse pool's texture: gathered from its page table by bands, unmapped ones as zero texels (until 2026-11-03 a copy of its whole range was made first)
+     if (im->vpool) { if (!im->vbind) upload_sparse_parts(im, cb, 0, 0, 1, 0); return; }   // (a GPU-written one's content is the GPU's: sparse_bind)
+     uint8_t *part = NULL; const uint8_t *src = t->mem;
++    int aud = vka_caud_on() && is_astc(f->vk) && im->layers >= 8; uint32_t a_n = 0, a_small = 0, a_zero = 0;
+     uint8_t **prev = g_up_holes && is_astc(f->vk) && !linear && !is3d ? calloc(im->layers, sizeof *prev) : NULL;   // (copies: vka_up_point may let the spans go)
+     for (uint32_t lv = 0; lv < (linear ? 1 : im->levels); lv++) {
+         uint32_t w = im->w >> lv ? im->w >> lv : 1, h = im->h >> lv ? im->h >> lv : 1, z = is3d ? (im->depth >> lv ? im->depth >> lv : 1) : 1;
+@@ -2363,18 +2373,20 @@ static void upload_(vka_img *im, const tex_t *t, VkCommandBuffer cb, uint64_t *n
+                 }
+                 static _Atomic int nz; if (zb && atomic_fetch_add(&nz, 1) < 64) VLOG("NaN scan: upload of serial %llu format %#x level %u layer %u: %llu of %llu blocks all zero (storage %p)", (unsigned long long)t->serial, d->format, lv, ly, (unsigned long long)zb, (unsigned long long)nb, (const void *)t->mem);
+             }
++            if (aud && (uint64_t)w * h <= 64 * 64) { a_small++; a_zero += !mem_any(s.ptr, piece); }
+             int whole = prev && astc_fill(im, s.ptr, lv, ly, prev[ly]);
+             uint64_t bad = astc_clean(f->vk, s.ptr, piece); astc_bad_note(t, lv + im->base, ly, bad, piece / 16);
+             if (prev) { free(prev[ly]); prev[ly] = whole && !bad && (prev[ly] = malloc(piece)) ? memcpy(prev[ly], s.ptr, piece) : NULL; }
+             if (astc_keep(im, lv, bad)) continue;
+             VkBufferImageCopy c = {s.off, bx * f->bw, by * f->bh, {im->aspect, lv, ly, 1}, {0, 0, 0}, {w, h, z}};
+             vk.vkCmdCopyBufferToImage(cb, s.buf, im->img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+-            bytes += piece;
+-            if (!(cb = vka_up_point(cb))) { free(part); prev_drop(prev, im->layers); *nbytes = bytes; return; }
++            bytes += piece; a_n++;
++            if (!(cb = vka_up_point(cb))) { free(part); prev_drop(prev, im->layers); *nbytes = bytes; if (aud) ca_upload_note(im, "its levels and layers one by one, cut short (no upload batch)", a_n, bytes, a_small, a_zero); return; }
+         }
+     }
+     free(part); prev_drop(prev, im->layers);
+     *nbytes = bytes;
++    if (aud) ca_upload_note(im, "all its levels and layers, one by one", a_n, bytes, a_small, a_zero);
+     static _Atomic int n; if (atomic_fetch_add(&n, 1) < 4) VLOG("texture serial %llu %ux%u format %#x: %llu bytes uploaded from guest memory", (unsigned long long)t->serial, im->w, im->h, d->format, (unsigned long long)bytes);
+ }
+ 
+@@ -3755,6 +3767,14 @@ static const char *const ca_kinds[] = {"texture → texture", "texture → textu
+                                        "texture → texture, from the source's storage", "WriteTexels"};
+ void hk_astc_count(const uint8_t *data, size_t n, unsigned bw, unsigned bh, uint32_t out[7]);   // vka_astc_hdr.cpp
+ int vka_caud_on(void) { return VKA_ENV("DM_VK_COPY_AUDIT", 0) > 0; }
++// An upload of an ASTC texture of 8 layers or more (replay thread): what it copied, and how many of its pieces of 64x64 texels or less came from storage that was
++// all zero (an upload makes those zero texels, never all-zero blocks). Mario Kart World's 1024x1024 x46 array (serial 34117 on the S26) held all-zero blocks at
++// every such level, in all 46 layers, while it was content from its storage that no copy wrote
++static void ca_upload_note(const vka_img *im, const char *how, uint32_t copies, uint64_t bytes, uint32_t small, uint32_t zero) {
++    static _Atomic int n; if (atomic_fetch_add(&n, 1) >= 256) return;
++    VLOG("copy audit: upload of serial %llu %ux%ux%u format %#x (image levels %u+%u%s): %s: %u copies, %.1f KiB; of levels of 64x64 texels or less %u copies, %u of them of storage that was all zero",
++         (unsigned long long)im->serial, im->d.width, im->d.height, im->layers, im->d.format, im->base, im->levels, im->soft ? ", soft" : "", how, copies, bytes / 1024.0, small, zero);
++}
+ static void ca_state(const vka_img *im, char *o, size_t n) {
+     snprintf(o, n, "serial %llu format %#x %ux%ux%u, image levels %u+%u%s%s%s%s%s%s%s%s%s", (unsigned long long)im->serial, im->d.format, im->d.width, im->d.height, im->layers, im->base, im->levels,
+              im->gpu_owned ? ", GPU-written" : "", im->track ? ", tracked" : "", im->vtrack ? ", sparse" : "", im->vbind ? ", sparse GPU-written" : "", im->rs ? ", residency image" : "",
+@@ -3819,7 +3839,7 @@ static void ca_copies_report(uint64_t fr) {
+ // time and when its look changes: per layer the mean colour (as stored, RRGGBB and /AA when not opaque), then what is wrong, if anything. The other ASTC images
+ // (uploaded from storage, in no copy) are looked at too, CA_ROLL of them a pass and their sampled levels only, and logged only when something is wrong
+ enum { CA_FETCH_TEXELS = 64 * 64 };
+-typedef struct { uint64_t serial; uint32_t fmt, tw, th, layers, level, il, w, h, ly0, nly, nb, bw, bh, flags; VkDeviceSize off, foff, fstep; uint8_t srgb, fetched; } ca_rec;   // nb: blocks a layer; level: the texture's, il: the image's
++typedef struct { uint64_t serial; uint32_t fmt, tw, th, layers, level, il, w, h, ly0, nly, nb, bw, bh, flags; VkDeviceSize off, foff, fstep; uint8_t srgb, fetched; uint32_t snz; } ca_rec;   // nb: blocks a layer; level: the texture's, il: the image's; snz: 16-byte units of its layers' storage that are not zero (UINT32_MAX: not read)
+ typedef struct { ca_rec r[CA_REC]; int n, have, last; _Atomic int busy; vka_span mem; uint32_t pass, nimg, unread; uint64_t f0, frame; } ca_batch;
+ static ca_batch g_cab[CA_BATCH];
+ static struct { uint64_t ser[CA_SET], next, f0; uint8_t minor[CA_SET]; int n, cur, active, roll; uint32_t lv, ly, pass, unread; } g_cas;   // (replay thread) minor: an image of no copy
+@@ -3888,6 +3908,7 @@ static void ca_scan_report(ca_batch *b) {
+         free(ref);
+         if ((r->flags & 32) && !(nbl | nml | ndl | hz | hh | hi)) continue;   // (an image of no copy with nothing wrong: no line)
+         sig = (sig ^ (hz | (uint64_t)hh << 20 | (uint64_t)hi << 40)) * 1099511628211ull;
++        sig = (sig ^ r->snz) * 1099511628211ull;
+         int e = 0; while (e < g_ncaseen && !(g_caseen[e].serial == r->serial && g_caseen[e].level == r->level && g_caseen[e].ly0 == r->ly0)) e++;
+         if (e < g_ncaseen && g_caseen[e].sig == sig) continue;   // as it looked before
+         if (e == g_ncaseen) { if (g_ncaseen == CA_SEEN) continue; g_caseen[e].serial = r->serial; g_caseen[e].level = r->level; g_caseen[e].ly0 = r->ly0; g_ncaseen++; }
+@@ -3900,6 +3921,7 @@ static void ca_scan_report(ca_batch *b) {
+                                               r->flags & 64 ? " (a level RADV reaches through its non-block-compressed view)" : "", nml, ms, ndl, ds);
+         if (nbl | nml | ndl | hz | hh | hi) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; image: content %s%s%s%s", (const char *[]){"zero", "filled", "tracked", "sparse"}[r->flags >> 8 & 3],
+                                                                   r->flags & 0x400 ? "" : ", no storage", r->flags & 0x800 ? "" : ", not from its storage", r->flags & 0x1000 ? ", soft" : "");
++        if ((nbl | nml | ndl | hz | hh | hi) && r->snz != UINT32_MAX && wo < sizeof wrong) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; its storage now: %u of %u blocks not zero", r->snz, r->nb * r->nly);
+         VLOG("copy audit: look %u frame %llu: serial %llu format %#x %ux%ux%u%s%s%s%s%s level %u (%ux%u) layers %u-%u, mean colours%s%s", b->pass, (unsigned long long)b->frame, (unsigned long long)r->serial, r->fmt,
+              r->tw, r->th, r->layers, r->flags & 1 ? " GPU-written" : "", r->flags & 2 ? " WriteTexels" : "", r->flags & 4 ? " residency" : "", r->flags & 8 ? " sparse" : "", r->flags & 32 ? " (in no copy)" : r->flags & 16 ? " dense-capped" : "",
+              r->level, r->w, r->h, r->ly0, r->ly0 + r->nly - 1, cs, wrong);
+@@ -3984,6 +4006,19 @@ void vka_caud_scan(VkCommandBuffer cb, uint64_t fence) {
+         b->r[b->n] = (ca_rec){im->serial, (uint32_t)im->d.format, (uint32_t)im->d.width, (uint32_t)im->d.height, im->layers, i + im->base, i, w, h, ly0, n, bx * by, f->bw, f->bh,
+                               (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0) | (minor ? 32u : 0) | (i >= astc_reach_levels(im) ? 64u : 0) |
+                               ((uint32_t)(im->mode & 3) << 8) | (im->mem ? 0x400u : 0) | (im->from_mem ? 0x800u : 0) | (im->soft ? 0x1000u : 0), used, foff, fstep, f->srgb, (uint8_t)fetch};
++        {   // an image of no copy with content from its storage: what that storage holds at this level now (read through the guest's mappings)
++            static uint8_t sbuf[16384]; uint32_t snz = UINT32_MAX;
++            if (minor && im->mem && im->from_mem && !im->vpool && !im->gpu_owned && !img_pool_dead(im)) {
++                snz = 0;
++                for (uint32_t q = 0; q < n; q++) {
++                    uint64_t so, sl; sub_range(&im->d, &im->L, i + im->base, ly0 + q, &so, &sl);
++                    if (!sl || sl > sizeof sbuf) { snz = UINT32_MAX; break; }
++                    dm_guest_read_mapped(sbuf, (uintptr_t)im->mem + so, (size_t)sl);
++                    for (uint64_t u = 0; u + 16 <= sl; u += 16) snz += (uint32_t)mem_any(sbuf + u, 16);
++                }
++            }
++            b->r[b->n].snz = snz;
++        }
+         tim[b->n++] = im; im->refs++; im->holds++; if (im->last_fence < fence) im->last_fence = fence;
+         used = foff + n * fstep;
+         if (g_cas.ly >= im->layers) { g_cas.lv++; g_cas.ly = 0; }

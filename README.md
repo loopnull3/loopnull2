@@ -137,10 +137,14 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   The fix under test (`native_patches/0006-radv-astc-level-cap.patch`): with RADV a sampled
   view of an ASTC image of blocks larger than 4x4 ends before its first such level, so the level
   before it is drawn in its place (`DM_VK_ASTC_LEVEL_CAP=0` in Diagnostic switches turns it
-  off). It ran on an S26: the log shows the views cut, and what the screen showed is not
-  reported yet. Still open: the level drawn in its place has its first blocks overwritten by
-  the next level's upload; a few ASTC images hold only zero bytes and sample magenta, and the
-  terrain arrays' first fill is (1, 0, 1), which may be data and no colour. Tried and taken
+  off). It ran on an S26: the log shows the views cut, and the pink is still there. That
+  run's log has one texture the cut cannot explain: a 1024x1024 array of 46 layers whose levels
+  of 64x64 texels or less are all-zero blocks in every layer, which is the error colour at a
+  distance and nothing wrong up close. Whether the driver loses the writes into those levels
+  or the uploads never carried them is not known; `native_patches/0007-astc-array-audit.patch`
+  makes the next audit run say which. Still open: the level drawn in its place has its first
+  blocks overwritten by the next level's upload, and the terrain arrays' first fill is
+  (1, 0, 1), which may be data and no colour. Tried and taken
   out: soft textures, dense images for the sparse ASTC arrays, cleaning buffer copies (the game
   makes none), illegal void extents (the game has none), and a CPU copy for levels of sizes
   that are no power of two (never run).
