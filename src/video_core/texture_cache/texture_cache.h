@@ -3486,10 +3486,10 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
                 for (ImageCopy& copy : copies) {
                     copy.extent.width = (std::min)(
                         copy.extent.width,
-                        (std::max)<u32>(((width >> samples_x) * up_scale) >> down_shift, 1));
+                        (std::max)(((width >> samples_x) * up_scale) >> down_shift, u32{1}));
                     copy.extent.height = (std::min)(
                         copy.extent.height,
-                        (std::max)<u32>(((height >> samples_y) * up_scale) >> down_shift, 1));
+                        (std::max)(((height >> samples_y) * up_scale) >> down_shift, u32{1}));
                 }
                 runtime.CopyImageMSAA(new_image, overlap, copies);
             } else {
