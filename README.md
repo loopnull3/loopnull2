@@ -118,8 +118,9 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
     non-block-compressed view, with the first level's block count aligned up to 16 taken as its
     padding: a level is one when for its width or height `max(min(max(blocks << level, first),
     padding) >> level, 1)` is less than its block count. The rule names 34 more levels that
-    sample right (textures from 1024x768 up among them, whose padding may be wider). A texture
-    of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
+    sample right: in larger textures (level 6 of 1024x768), whose padding may be wider, and a
+    few where that view is right (level 5 of a 51x819 texture, whose level 6 is wrong). A
+    texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
   - the audit's own test textures (`mip check`) all came back right: none was of a size that
     reaches that view. It now has three of the game's sizes: 256x384 ASTC, the same block
     counts as BC3 (no error colour there: such a level would be black), and 1024x768;
