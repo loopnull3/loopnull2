@@ -43,6 +43,11 @@ FrontendApplet::~FrontendApplet() = default;
 void FrontendApplet::Initialize() {
     std::shared_ptr<IStorage> common = PopInData();
     ASSERT(common != nullptr);
+    if (common == nullptr) {
+        // (The caller pushed nothing: the arguments stay zero.)
+        initialized = true;
+        return;
+    }
     const auto common_data = common->GetData();
 
     ASSERT(common_data.size() >= sizeof(CommonArguments));
@@ -251,7 +256,12 @@ std::shared_ptr<FrontendApplet> FrontendAppletHolder::GetApplet(std::shared_ptr<
     case AppletId::NetConnect:
         return std::make_shared<NetConnect>(system, applet, mode, *frontend.net_connect);
     case AppletId::None:
-        return nullptr;
+        // nifm's GetAppletInfo names no applet, and a program without a network asks for the one
+        // it names (Minecraft 1.26.62 at its start). It gets an applet that ends at once, as when
+        // the console's dialog is dismissed: with none, it waited for one that never ran and
+        // showed no picture.
+        LOG_WARNING(Service_AM, "Library applet without an id: one that ends at once");
+        return std::make_shared<StubApplet>(system, applet, id, mode);
     default:
         UNIMPLEMENTED_MSG("No frontend implementation exists for applet_id={:#x} program_id={:016X}! Using stub applet.", static_cast<u32>(id), applet->program_id);
         return std::make_shared<StubApplet>(system, applet, id, mode);
