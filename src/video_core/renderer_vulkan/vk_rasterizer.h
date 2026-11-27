@@ -327,6 +327,10 @@ private:
     } oot_actor, oot_previous_actor;
 #endif
     u64 render_trace_frame = 0;
+    /// Frames of this session, for the lines a report reads (a second game in one run of the
+    /// program starts from zero again).
+    u64 session_frames = 0;
+    u32 display_sources_logged = 0;
     /// EDEN_NX2_FRAMESKIP=<n> (2 to 4): one frame in n is drawn, the others only run their
     /// compute work, copies and queries.
     /// EDEN_NX2_FRAMESKIP_PARTS picks what a dropped frame skips: any of draws, clears and

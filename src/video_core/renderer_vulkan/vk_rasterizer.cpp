@@ -33,6 +33,7 @@
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
+#include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -67,6 +68,7 @@
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/shader_cache.h"
+#include "video_core/texture_cache/formatter.h"
 #include "video_core/texture_cache/texture_cache_base.h"
 #include "video_core/textures/texture.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -422,6 +424,13 @@ const RasterizerVulkan::MeshArena& RasterizerVulkan::AcquireMeshArena() {
     return *it;
 }
 
+namespace {
+// For a report of a black picture: whether the game draws at all (logged by TickFrame).
+std::atomic<u64> g_counted_draws{};
+std::atomic<u64> g_counted_draws_skipped{};
+std::atomic<u64> g_counted_clears{};
+} // namespace
+
 RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra::GPU& gpu_,
                                    Tegra::MaxwellDeviceMemoryManager& device_memory_,
                                    const Device& device_, MemoryAllocator& memory_allocator_,
@@ -450,6 +459,9 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       accelerate_dma(buffer_cache, texture_cache, scheduler),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       frame_dump(device, memory_allocator, scheduler) {
+    g_counted_draws.store(0, std::memory_order_relaxed);
+    g_counted_draws_skipped.store(0, std::memory_order_relaxed);
+    g_counted_clears.store(0, std::memory_order_relaxed);
     scheduler.SetQueryCache(query_cache);
     buffer_cache.SetPendingCpuWrites(
         [this](const std::function<void(DAddr, size_t)>& callback) {
@@ -753,13 +765,6 @@ bool RasterizerVulkan::TryNx2IndirectReset(bool is_indexed, u32 instance_count) 
     gpu.TickWork();
     return true;
 }
-
-namespace {
-// For a report of a black picture: whether the game draws at all (logged by TickFrame).
-std::atomic<u64> g_counted_draws{};
-std::atomic<u64> g_counted_draws_skipped{};
-std::atomic<u64> g_counted_clears{};
-} // namespace
 
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_indirect) {
@@ -3248,11 +3253,22 @@ void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
 }
 
 void RasterizerVulkan::TickFrame() {
-    if (static u64 frames{}; ++frames == 1 || frames == 120 || frames == 1200) {
+    const u64 frames = ++session_frames;
+    if (frames == 1 || frames == 120 || frames == 1200) {
         LOG_INFO(Render_Vulkan, "Up to frame {}: {} draws ({} skipped), {} clears", frames,
                  g_counted_draws.load(std::memory_order_relaxed),
                  g_counted_draws_skipped.load(std::memory_order_relaxed),
                  g_counted_clears.load(std::memory_order_relaxed));
+    }
+    // Debug knob 1 (Settings, Debug, "Debug knobs" = 1): two frames of the session are captured
+    // with the textures they sample, and every line of the capture's manifest is repeated in the
+    // log, so a report of a wrong picture needs only the log. For a device with no debug server.
+    if ((frames == 300 || frames == 1500) && Settings::GetDebugKnobAt(0)) {
+        const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) /
+                         fmt::format("frame-{}", frames);
+        if (!frame_dump.ArmLogged(dir)) {
+            LOG_WARNING(Render_Vulkan, "Frame {}: no capture, another one is running", frames);
+        }
     }
     if (VideoCore::Nx2Debug::HasRequests()) {
         if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
@@ -3571,7 +3587,7 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
             bool operator==(const Source&) const = default;
         };
         static Source last{};
-        static u32 logged{};
+        u32& logged = display_sources_logged;
         const Source now{framebuffer_addr, config.width, config.height,
                          static_cast<u32>(config.pixel_format), image_view != nullptr};
         if (logged < 24 && (logged == 0 || now != last)) {
@@ -3581,8 +3597,9 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
                      "Display source: address={:#x} {}x{} stride={} format={}, {}", framebuffer_addr,
                      config.width, config.height, pixel_stride, now.format,
                      image_view != nullptr
-                         ? fmt::format("the texture cache's {}x{} image", image_view->size.width,
-                                       image_view->size.height)
+                         ? fmt::format("the texture cache's {}x{} {} image",
+                                       image_view->size.width, image_view->size.height,
+                                       image_view->format)
                          : std::string{"not in the texture cache: read from guest memory"});
         }
     }

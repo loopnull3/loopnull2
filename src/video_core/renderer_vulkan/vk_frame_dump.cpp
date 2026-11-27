@@ -270,6 +270,27 @@ void FrameDump::Arm(std::filesystem::path directory_, bool sampled, bool buffers
         VideoCore::Nx2Debug::FinishCapture(id, {.error = "another capture is in progress"});
         return;
     }
+    Reset(std::move(directory_));
+    log_lines = false;
+}
+
+bool FrameDump::ArmLogged(std::filesystem::path directory_) {
+    if (!schedule.Arm(true, false, 0)) {
+        return false;
+    }
+    Reset(std::move(directory_));
+    log_lines = true;
+    return true;
+}
+
+void FrameDump::Line(const std::string& line) {
+    manifest << line << '\n';
+    if (log_lines) {
+        LOG_INFO(Render_Vulkan, "Frame dump: {}", line);
+    }
+}
+
+void FrameDump::Reset(std::filesystem::path directory_) {
     StopWriter();
     directory = std::move(directory_);
     truncated = false;
@@ -720,10 +741,8 @@ void FrameDump::WriterLoop() {
             queue.pop_front();
         }
         if (job.summary) {
-            manifest << fmt::format(
-                            R"({{"kind":"summary","images":{},{},"bytes":{},"truncated":{}}})",
-                            images, job.tags, written_bytes, job.truncated)
-                     << '\n';
+            Line(fmt::format(R"({{"kind":"summary","images":{},{},"bytes":{},"truncated":{}}})",
+                             images, job.tags, written_bytes, job.truncated));
             manifest.close();
             LOG_INFO(Render_Vulkan, "Frame dump done: {} images, {}, {} MiB in {}{}", images,
                      job.tags, written_bytes >> 20, directory.string(),
@@ -737,7 +756,7 @@ void FrameDump::WriterLoop() {
         if (job.raw) {
             WriteBuffer(job);
         } else if (job.name.empty()) {
-            manifest << job.tags << '\n';
+            Line(job.tags);
         } else {
             Write(job);
         }
@@ -820,12 +839,11 @@ void FrameDump::Write(const Job& job) {
             png = fmt::format("\"{}.png\"", job.name);
         }
     }
-    manifest << fmt::format(
-                    R"({{"name":"{}",{},"format":"{}","width":{},"height":{},"depth":{},"level":{},"layer":{},"gpu_addr":"{:#x}","rescaled":{},"depth_encoding":{},"raw":"{}.raw.zst","png":{}{}}})",
-                    job.name, job.tags, target.format, target.width, target.height,
-                    target.depth, target.level, target.layer, target.gpu_addr, target.rescaled,
-                    static_cast<u32>(target.depth_encoding), job.name, png, stats)
-             << '\n';
+    Line(fmt::format(
+        R"({{"name":"{}",{},"format":"{}","width":{},"height":{},"depth":{},"level":{},"layer":{},"gpu_addr":"{:#x}","rescaled":{},"depth_encoding":{},"raw":"{}.raw.zst","png":{}{}}})",
+        job.name, job.tags, target.format, target.width, target.height, target.depth,
+        target.level, target.layer, target.gpu_addr, target.rescaled,
+        static_cast<u32>(target.depth_encoding), job.name, png, stats));
 }
 
 void FrameDump::WriteBuffer(const Job& job) {
@@ -837,7 +855,7 @@ void FrameDump::WriteBuffer(const Job& job) {
         WriteFile(name, Common::Compression::CompressDataZSTDDefault(job.data.data(),
                                                                      job.data.size()));
     }
-    manifest << fmt::format(R"({{{},"hash":"{:016x}","raw":"{}"}})", job.tags, hash, name) << '\n';
+    Line(fmt::format(R"({{{},"hash":"{:016x}","raw":"{}"}})", job.tags, hash, name));
 }
 
 void FrameDump::WriteFile(const std::string& name, std::span<const u8> data) {
@@ -876,8 +894,7 @@ void FrameDump::TickFrame() {
         return;
     }
     const u64 frame = schedule.Frame();
-    manifest << fmt::format(R"({{"kind":"frame","frame":{},"seconds":{:.3f}}})", frame, elapsed)
-             << '\n';
+    Line(fmt::format(R"({{"kind":"frame","frame":{},"seconds":{:.3f}}})", frame, elapsed));
     writer = std::thread{[this] { WriterLoop(); }};
     LOG_INFO(Render_Vulkan, "Frame dump: capturing frame {} ({:.1f} s after boot){} into {}", frame,
              elapsed, schedule.Sampled() ? (schedule.Buffers() ? " with sampled textures and buffers" : " with sampled textures") : (schedule.Buffers() ? " with buffers" : ""), directory.string());

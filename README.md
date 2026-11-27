@@ -278,6 +278,12 @@ Android can't pass environment variables to an app, so the app reads them from
 effect the next time the app starts. The available switches are listed in
 [AGENTS.md](AGENTS.md#debugging-tools). Leave the file empty for normal play.
 
+A wrong picture needs no file: set Settings, Debug, "Debug knobs" to 1 and play for half a
+minute. Frames 300 and 1500 of the session are captured, and the log gets a `Frame dump:` line
+for every pass, every texture a pass samples and the image shown, with each one's size, format
+and lowest, highest and mean values. Set it back to 0 afterwards: a capture stalls the game for
+a moment.
+
 ## Building
 
 ```bash

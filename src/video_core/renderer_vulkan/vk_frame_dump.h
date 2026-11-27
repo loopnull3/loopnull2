@@ -164,6 +164,10 @@ public:
     /// Captures the next frame into `directory` for the debug server, which is told `id` once
     /// the manifest is complete. Works without EDEN_NX2_FRAME_DUMP.
     void Arm(std::filesystem::path directory, bool sampled, bool buffers, u64 id);
+    /// Captures the next frame and the textures it samples into `directory`, and repeats every
+    /// line of the manifest in the log: a report from a device with no debug server needs only
+    /// the log. False while another capture runs.
+    bool ArmLogged(std::filesystem::path directory);
 
 private:
     enum class DepthEncoding { None, Unorm16, Unorm24, Float32 };
@@ -218,6 +222,10 @@ private:
     void WriteBuffer(const Job& job);
     void WriteFile(const std::string& name, std::span<const u8> data);
     void StopWriter();
+    /// Everything a capture counts, from zero, into `directory_`.
+    void Reset(std::filesystem::path directory_);
+    /// A manifest line, also logged for ArmLogged's capture.
+    void Line(const std::string& line);
 
     const Device& device;
     MemoryAllocator& memory_allocator;
@@ -225,6 +233,7 @@ private:
 
     FrameDumpSchedule schedule;
     bool truncated{};
+    bool log_lines{};
     std::filesystem::path directory;
     std::chrono::steady_clock::time_point start;
 

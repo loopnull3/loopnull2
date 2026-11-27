@@ -130,6 +130,23 @@ void MaxwellDMA::Launch() {
         if (regs.launch_dma.remap_enable != 0 && is_const_a_dst) {
             const u32 component_size = regs.remap_const.component_size_minus_one + 1;
             ASSERT(component_size == 1 || component_size == 2 || component_size == 4);
+            if (component_size != 4 || regs.remap_const.num_dst_components_minus_one != 0) {
+                // A fill the code below writes as words of constant A only, for a report's log.
+                static std::atomic<u32> logged_fills{};
+                if (logged_fills.fetch_add(1, std::memory_order_relaxed) < 8) {
+                    const auto& remap = regs.remap_const;
+                    LOG_INFO(HW_GPU,
+                             "DMA fill of {} units at {:#x}: {} components of {} bytes (x {} y {} "
+                             "z {} w {}), constants {:#x} {:#x}",
+                             regs.line_length_in, static_cast<GPUVAddr>(regs.offset_out),
+                             remap.num_dst_components_minus_one + 1, component_size,
+                             static_cast<u32>(remap.dst_x.Value()),
+                             static_cast<u32>(remap.dst_y.Value()),
+                             static_cast<u32>(remap.dst_z.Value()),
+                             static_cast<u32>(remap.dst_w.Value()), remap.remap_consta_value,
+                             remap.remap_constb_value);
+                }
+            }
             if (component_size == 4) {
                 accelerate.BufferClear(regs.offset_out, regs.line_length_in, regs.remap_const.remap_consta_value);
             }
@@ -151,11 +168,24 @@ void MaxwellDMA::Launch() {
                 // 1.26.62 update makes them with lengths that are no multiple of 16).
                 static std::atomic<u32> logged{};
                 if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    // With the remap state: a write of constants has no source, and one that
+                    // does not start with constant A comes here and reads address 0.
+                    const auto& remap = regs.remap_const;
                     LOG_INFO(HW_GPU,
-                             "DMA copy between page kinds {:#x} and {:#x}: {} bytes, {:#x} to {:#x}",
+                             "DMA copy between page kinds {:#x} and {:#x}: {} bytes, {:#x} to "
+                             "{:#x}; remap {} of {} to {} components of {} bytes (x {} y {} z {} "
+                             "w {}), constants {:#x} {:#x}",
                              static_cast<u32>(src_kind), static_cast<u32>(dst_kind),
                              regs.line_length_in, static_cast<GPUVAddr>(regs.offset_in),
-                             static_cast<GPUVAddr>(regs.offset_out));
+                             static_cast<GPUVAddr>(regs.offset_out),
+                             regs.launch_dma.remap_enable != 0 ? "on" : "off",
+                             remap.num_src_components_minus_one + 1,
+                             remap.num_dst_components_minus_one + 1,
+                             remap.component_size_minus_one + 1, static_cast<u32>(remap.dst_x.Value()),
+                             static_cast<u32>(remap.dst_y.Value()),
+                             static_cast<u32>(remap.dst_z.Value()),
+                             static_cast<u32>(remap.dst_w.Value()), remap.remap_consta_value,
+                             remap.remap_constb_value);
                 }
             }
             // A length that is no multiple of 16 ends in part of a unit: only that part is
