@@ -1,5 +1,5 @@
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 3ed8bd21..1d58e07b 100644
+index 33f528b2..975e0120 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -1295,6 +1295,18 @@ static void copy_bound(vka_img *im, VkCommandBuffer cb, const vka_span *s, uint3

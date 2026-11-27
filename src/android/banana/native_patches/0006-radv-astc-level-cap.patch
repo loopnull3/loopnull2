@@ -1,0 +1,24 @@
+diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
+index 975e0120..2ae50156 100644
+--- a/dm/gfx/vk_android/vka_tex.c
++++ b/dm/gfx/vk_android/vka_tex.c
+@@ -2851,6 +2851,19 @@ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int stor
+     if (l0 >= im->levels || a0 >= im->layers) return VK_NULL_HANDLE;
+     if (l0 + nl > im->levels) nl = im->levels - l0;
+     if (a0 + na > im->layers) na = im->layers - a0;
++    // RADV on Xclipse (measured on a Galaxy S26 with the copy audit, Hokkaido): what the driver writes into a level of an ASTC image through its non-block-compressed
++    // view (astc_reach_levels) the sampler does not find. Every texel of such a level samples as an all-zero block, the error colour, while a copy out of the level
++    // returns the blocks written: a 1024x384 texture's level 5, a 746x746 one's level 6, 115 of 684 sampled levels in one run of Mario Kart World, every one of them
++    // named by the rule (which also names 34 that sample right). A sampled view ends before the first such level: the level before it is sampled in its place, so a far
++    // flag or road marking is a little sharper than it should be and not magenta. DM_VK_ASTC_LEVEL_CAP: 0 off, 1 with any driver (default: with RADV)
++    if (!storage && is_astc(im->f.vk)) {
++        int on = VKA_ENV("DM_VK_ASTC_LEVEL_CAP", -1); uint32_t cap = (on < 0 ? V.driver_id == VK_DRIVER_ID_MESA_RADV : on) ? astc_reach_levels(im) : im->levels;
++        if (cap < im->levels && l0 + nl > cap) {
++            static _Atomic int n; if (atomic_fetch_add(&n, 1) < 32) VLOG("ASTC texture serial %llu %ux%u x%u format %#x: sampled through its first %u of %u levels (the driver's writes into the others are not where its sampler reads: DM_VK_ASTC_LEVEL_CAP)",
++                                                                     (unsigned long long)im->serial, im->w, im->h, im->layers, im->d.format, cap, im->levels);
++            if (l0 >= cap) { l0 = cap - 1; nl = 1; } else nl = cap - l0;
++        }
++    }
+     if (vt_want >= 0 && !storage) for (int i = 0; i < g_nfb; i++) if (g_fb_im[i] == im && g_fb_lv[i] > l0 && g_fb_lv[i] < l0 + nl) {
+         static _Atomic int n; if (!atomic_exchange(&n, 1)) VLOG("a pass samples the texture it renders (serial %llu level %u) through levels %u+%u: sampled through the levels below it", (unsigned long long)im->serial, g_fb_lv[i], l0, nl);
+         nl = g_fb_lv[i] - l0; }

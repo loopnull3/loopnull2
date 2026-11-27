@@ -102,28 +102,35 @@ fixes made on an S26 with RADV in [loopnull3/Hokkaido](https://github.com/loopnu
   (`native_patches/0004-codec-registered-buffers.patch`). Not run on a phone here.
 - **Soft textures** shows and keeps the game's default (Mario Kart World's profile has them on)
   instead of holding it off.
-- **Mario Kart World, pink at a distance (open):** on an S26 the road surface is pink in bands
-  from some distance on and whole further away, right up close, and the border moves with the
-  kart; on the title screen a far flag has magenta squares while the same banner up close is
-  right. Measured on the phone with `DM_VK_COPY_AUDIT=1`
-  (`native_patches/0003-astc-copy-audit.patch`):
+- **Mario Kart World, pink at a distance (a fix under test):** on an S26 the road surface is
+  pink in bands from some distance on, right up close, and the border moves with the kart; on
+  the title screen a far flag has magenta pieces while the same banner up close is right.
+  Measured on the phone with `DM_VK_COPY_AUDIT=1` (`native_patches/0003-astc-copy-audit.patch`):
   - the driver draws all-zero blocks, HDR blocks and illegal void-extent blocks as (1, 0, 1, 1)
     and every legal LDR block tried right;
   - the game's uploads hold none but all-zero blocks, which are taken out, and the terrain
     arrays and every texture copied into them hold none when read back;
-  - the driver writes, copies, samples and reads back every level of mip-mapped ASTC and BC3
-    test textures right, sizes that are no power of two included;
+  - in the game's own textures the phone samples whole small levels as that error colour while
+    a copy out of the same level returns the valid blocks written into it: 115 of 684 sampled
+    levels in one run (level 5 of a 1024x384 and of a 256x384 array, level 6 of 746x746
+    textures). All 115 are levels RADV writes through addrlib's non-block-compressed view, by
+    this rule: with the first level's block count aligned up to 16 as the padding, a level is
+    one when for its width or height `max(min(max(blocks << level, first), padding) >> level,
+    1)` is less than its block count. The rule names 34 more levels that sample right. A
+    texture of 3 x 2^n texels has one such level, 12 texels wide: a band at one distance;
+  - the audit's own test textures (`mip check`) all come back right: none is of a size that
+    reaches that view;
   - the game copies texture to texture only, and fills every layer of a terrain array, at
     every level, from one texture (serial 130 or 132) before the tiles' own textures follow.
 
-  So no bad block and no misplaced level has been found, and the pink may be that first fill
-  showing where a tile's own data has not arrived. In the pink bands of a screenshot red and
-  blue are far above the asphalt beside them and green is the same. The audit now also logs,
-  per level and layer, the mean colour of what those images hold and compares what the phone
-  samples with a reference decoder, texel by texel. Tried and taken out: soft textures, dense
-  images for the sparse ASTC arrays, cleaning buffer copies (the game makes none), illegal void
-  extents (the game has none), and two workarounds for levels of sizes that are no power of
-  two (the mip check shows the driver has that right).
+  The fix under test (`native_patches/0006-radv-astc-level-cap.patch`): with RADV a sampled
+  view of an ASTC image ends before its first such level, so the level before it is drawn in its
+  place (`DM_VK_ASTC_LEVEL_CAP=0` in Diagnostic switches turns it off). It has not run on a
+  phone. Still open: a few ASTC images hold only zero bytes and sample magenta, and the
+  terrain arrays' first fill is (1, 0, 1), which may be data and no colour. Tried and taken
+  out: soft textures, dense images for the sparse ASTC arrays, cleaning buffer copies (the game
+  makes none), illegal void extents (the game has none), and a CPU copy for levels of sizes
+  that are no power of two (never run).
 - **Mario Kart World, light-blue pillars and spikes into the sky (open):** on an S26 they stand
   where there is no water, and go when mesh draws are skipped (`DM_VK_MESH_EMU=0`); the game's
   mesh programs there are its water (fluid simulation) and its trails. Candidate under test

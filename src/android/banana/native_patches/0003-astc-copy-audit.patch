@@ -399,7 +399,7 @@ index 44d32b05..e3b6dbc6 100644
  static int scan_one(VkCommandBuffer cb, batch_t *b, vka_img *im, uint32_t lv, uint32_t l0, uint32_t pass, int bind, int tid, uint64_t stats) {
      if (b->n == MAXR) return 0;
 diff --git a/dm/gfx/vk_android/vka_tex.c b/dm/gfx/vk_android/vka_tex.c
-index 9a3dd137..3ed8bd21 100644
+index 9a3dd137..33f528b2 100644
 --- a/dm/gfx/vk_android/vka_tex.c
 +++ b/dm/gfx/vk_android/vka_tex.c
 @@ -8,6 +8,7 @@
@@ -410,7 +410,27 @@ index 9a3dd137..3ed8bd21 100644
  #include "../tex/nvn_deswizzle.h"
  #include "../nvn/dmsh_abi_vk.h"
  #include "../nvn/nvn_dirty.h"
-@@ -3335,6 +3336,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
+@@ -2800,6 +2801,19 @@ static VkComponentSwizzle swz1(int n) { return n >= 0 && n <= 5 ? (VkComponentSw
+ // each drawn from the one above through a view of the whole chain; sampling the attached level is a feedback loop Vulkan leaves undefined (on Adreno: NaN texels, which bloom
+ // spread into white blotches and black speckles over the whole level)
+ static vka_img *g_fb_im[9]; static uint32_t g_fb_lv[9]; static int g_nfb;
++// The levels of a block-compressed image, from its first, that a view of it as an uncompressed format of one texel a block reaches as its own levels. RADV copies into
++// and out of a compressed image through such a view. The view's level L has the first level's block count halved L times, which is fewer blocks than the level has when
++// a size is no power of two (1024x384 texels of 8x8 blocks: 48 block rows, level 5 has 2 and 48 >> 5 is 1). RADV then widens the view, as far as the first level's
++// padding goes (taken as to 16 blocks, the least the copy audit's measurements allow), and past that takes addrlib's non-block-compressed view. → the first level that
++// needs that view, or the image's level count when none does
++static uint32_t astc_reach_levels(const vka_img *im) {
++    for (uint32_t i = 1; i < im->levels; i++) for (int k = 0; k < 2; k++) {
++        uint32_t d = k ? im->h : im->w, b = k ? im->f.bh : im->f.bw, base = (d + b - 1) / b, pad = (base + 15) & ~15u, lv = d >> i ? d >> i : 1, need = (lv + b - 1) / b;
++        uint64_t ext = (uint64_t)need << i; if (ext < base) ext = base; if (ext > pad) ext = pad;
++        if ((ext >> i ? ext >> i : 1) < need) return i;
++    }
++    return im->levels;
++}
+ void vka_tex_feedback(vka_img *const *ims, const uint32_t *levels, int n) { g_nfb = n > 9 ? 9 : n; for (int i = 0; i < g_nfb; i++) { g_fb_im[i] = ims[i]; g_fb_lv[i] = levels[i]; } }
+ static VkImageView view_of(const treg_ent *e, vka_img *im, int vt_want, int storage, VkFormat ovr) {
+     vka_fmt f; const view_t *v = e->has_v ? &e->v : NULL;
+@@ -3335,6 +3349,7 @@ void vka_tex_prepare(VkCommandBuffer cb) {
              if (vka_scratch(w->size, 16, &s)) {
                  for (int j = 0; j < i; j++) if (reg_write_overlap(&g_reg_writes[j], w)) { vka_barrier(cb); break; }
                  memcpy(s.ptr, w->data, w->size);
@@ -418,7 +438,7 @@ index 9a3dd137..3ed8bd21 100644
                  VkBufferImageCopy c = {
                      .bufferOffset = s.off,
                      .bufferRowLength = 0,
-@@ -3682,4 +3684,268 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
+@@ -3682,4 +3697,273 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
               done ? how : "nothing readable", done ? "" : ": zeros");
      if (im) vka_tex_drop(im);
  }
@@ -506,7 +526,7 @@ index 9a3dd137..3ed8bd21 100644
 +static ca_batch g_cab[CA_BATCH];
 +static struct { uint64_t ser[CA_SET], next, f0; uint8_t minor[CA_SET]; int n, cur, active, roll; uint32_t lv, ly, pass, unread; } g_cas;   // (replay thread) minor: an image of no copy
 +static struct { uint64_t serial, sig; uint32_t level, ly0; } g_caseen[CA_SEEN]; static int g_ncaseen;   // (the worker's, as g_cap)
-+static struct { uint32_t pass; uint64_t lay, bytes, bad, dmag, diff; } g_cap;
++static struct { uint32_t pass; uint64_t lay, bytes, bad, dmag, diff, cut; } g_cap;   // cut: unlike the reference in the levels astc_reach_levels leaves out
 +static _Atomic int g_ca_lines, g_ca_detail;
 +int hk_astc_decode(const uint8_t *data, unsigned w, unsigned h, unsigned bw, unsigned bh, float *out);   // vka_astc_hdr.cpp
 +uint32_t hk_astc_look(const uint8_t *data, size_t n, unsigned bw, unsigned bh, unsigned step, uint32_t *seen, float mean[4]);
@@ -551,15 +571,16 @@ index 9a3dd137..3ed8bd21 100644
 +            for (uint32_t t = 0; t < nt; t++) {
 +                const float *d = dev + 4 * (size_t)t, *e = ref + 4 * (size_t)t; float s[4] = {d[0], d[1], d[2], d[3]};
 +                if (r->srgb) { s[0] = ca_enc(s[0]); s[1] = ca_enc(s[1]); s[2] = ca_enc(s[2]); }
-+                int dm = ca_magenta(d), rm = e[0] != e[0] || ca_magenta(e), df = rm ? !dm : dm;   // (the reference's error block: NaN)
-+                for (int u = 0; u < 4 && !rm && !df; u++) { float x = s[u] - e[u]; if (x < -0.06f || x > 0.06f) df = 1; }
++                int dm = ca_magenta(d), rn = e[0] != e[0], df = rn && !dm;   // (the reference's error block is NaN: the error colour is what a device shows for it)
++                for (int u = 0; u < 4 && !rn && !df; u++) { float x = s[u] - e[u]; if (x < -0.06f || x > 0.06f) df = 1; }
 +                nmag += (uint32_t)dm; ndiff += (uint32_t)df;
 +                if ((df || dm) && (first == UINT32_MAX || (df && first_mag))) { first = t; first_mag = !df; }
 +            }
 +            sig = (sig ^ (nmag | (uint64_t)ndiff << 32)) * 1099511628211ull;
 +            if (nmag) { nml++; g_cap.dmag++; if (mo + 24 < sizeof ms) mo += (size_t)snprintf(ms + mo, sizeof ms - mo, " %u:%u of %u", ly, nmag, nt); }
-+            if (ndiff) { ndl++; g_cap.diff++; if (dn + 24 < sizeof ds) dn += (size_t)snprintf(ds + dn, sizeof ds - dn, " %u:%u of %u", ly, ndiff, nt); }
-+            if (first != UINT32_MAX && atomic_fetch_add(&g_ca_detail, 1) < 96) {
++            if (ndiff) { ndl++; if (r->flags & 64) g_cap.cut++; else g_cap.diff++; if (dn + 24 < sizeof ds) dn += (size_t)snprintf(ds + dn, sizeof ds - dn, " %u:%u of %u", ly, ndiff, nt); }
++            static _Atomic int same;   // (texels both read as the error colour: a few lines; texels the device samples unlike the reference: the rest)
++            if (first != UINT32_MAX && (first_mag ? atomic_fetch_add(&same, 1) < 8 : atomic_fetch_add(&g_ca_detail, 1) < 88)) {
 +                uint32_t x = first % r->w, y = first / r->w, bx = (r->w + r->bw - 1) / r->bw; const float *d = dev + 4 * (size_t)first, *e = ref + 4 * (size_t)first; char what[260];
 +                hk_astc_describe(blk + 16 * ((size_t)(y / r->bh) * bx + x / r->bw), r->bw, r->bh, what, sizeof what);
 +                VLOG("copy audit: look: serial %llu format %#x level %u layer %u texel %u,%u: the device samples (%.3f, %.3f, %.3f, %.3f)%s, the reference reads (%.3f, %.3f, %.3f, %.3f); its block %s",
@@ -577,15 +598,18 @@ index 9a3dd137..3ed8bd21 100644
 +        char wrong[1100] = ""; size_t wo = 0;
 +        if (hz | hh | hi) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; by header %u all-zero, %u HDR, %u illegal blocks", hz, hh, hi);
 +        if (nbl) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; blocks the reference reads as an error or HDR in %u layers [%s ]", nbl, bs);
-+        if (r->fetched) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; sampled by the device: the error colour in %u layers [%s ], unlike the reference in %u [%s ]", nml, ms, ndl, ds);
++        if (r->fetched) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; sampled by the device%s: the error colour in %u layers [%s ], unlike the reference in %u [%s ]",
++                                              r->flags & 64 ? " (a level RADV reaches through its non-block-compressed view)" : "", nml, ms, ndl, ds);
++        if (nbl | nml | ndl | hz | hh | hi) wo += (size_t)snprintf(wrong + wo, sizeof wrong - wo, "; image: content %s%s%s%s", (const char *[]){"zero", "filled", "tracked", "sparse"}[r->flags >> 8 & 3],
++                                                                  r->flags & 0x400 ? "" : ", no storage", r->flags & 0x800 ? "" : ", not from its storage", r->flags & 0x1000 ? ", soft" : "");
 +        VLOG("copy audit: look %u frame %llu: serial %llu format %#x %ux%ux%u%s%s%s%s%s level %u (%ux%u) layers %u-%u, mean colours%s%s", b->pass, (unsigned long long)b->frame, (unsigned long long)r->serial, r->fmt,
 +             r->tw, r->th, r->layers, r->flags & 1 ? " GPU-written" : "", r->flags & 2 ? " WriteTexels" : "", r->flags & 4 ? " residency" : "", r->flags & 8 ? " sparse" : "", r->flags & 32 ? " (in no copy)" : r->flags & 16 ? " dense-capped" : "",
 +             r->level, r->w, r->h, r->ly0, r->ly0 + r->nly - 1, cs, wrong);
 +    }
 +    if (b->last)
-+        VLOG("copy audit: look %u (frames %llu-%llu): %u images, %llu levels x layers (%.1f MiB of blocks), %u layers not read (tiles without memory); %llu with blocks the reference reads as an error or HDR, %llu where the device samples the error colour, %llu where it samples unlike the reference",
++        VLOG("copy audit: look %u (frames %llu-%llu): %u images, %llu levels x layers (%.1f MiB of blocks), %u layers not read (tiles without memory); %llu with blocks the reference reads as an error or HDR, %llu where the device samples the error colour, %llu where it samples unlike the reference, and %llu more in levels RADV reaches through its non-block-compressed view",
 +             b->pass, (unsigned long long)b->f0, (unsigned long long)b->frame, b->nimg, (unsigned long long)g_cap.lay, g_cap.bytes / 1048576.0, b->unread, (unsigned long long)g_cap.bad,
-+             (unsigned long long)g_cap.dmag, (unsigned long long)g_cap.diff);
++             (unsigned long long)g_cap.dmag, (unsigned long long)g_cap.diff, (unsigned long long)g_cap.cut);
 +}
 +// The worker: batches whose submission is done, in order (the completion thread only hands them over)
 +static pthread_mutex_t g_cawmu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_cawcv = PTHREAD_COND_INITIALIZER;
@@ -660,7 +684,8 @@ index 9a3dd137..3ed8bd21 100644
 +        if (fetch) nfetch += n;
 +        VkDeviceSize foff = (used + n * per + al - 1) / al * al;
 +        b->r[b->n] = (ca_rec){im->serial, (uint32_t)im->d.format, (uint32_t)im->d.width, (uint32_t)im->d.height, im->layers, i + im->base, i, w, h, ly0, n, bx * by, f->bw, f->bh,
-+                              (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0) | (minor ? 32u : 0), used, foff, fstep, f->srgb, (uint8_t)fetch};
++                              (im->gpu_owned ? 1u : 0) | (im->wt ? 2u : 0) | (im->rs ? 4u : 0) | (im->vtrack ? 8u : 0) | (im->dcap ? 16u : 0) | (minor ? 32u : 0) | (i >= astc_reach_levels(im) ? 64u : 0) |
++                              ((uint32_t)(im->mode & 3) << 8) | (im->mem ? 0x400u : 0) | (im->from_mem ? 0x800u : 0) | (im->soft ? 0x1000u : 0), used, foff, fstep, f->srgb, (uint8_t)fetch};
 +        tim[b->n++] = im; im->refs++; im->holds++; if (im->last_fence < fence) im->last_fence = fence;
 +        used = foff + n * fstep;
 +        if (g_cas.ly >= im->layers) { g_cas.lv++; g_cas.ly = 0; }
