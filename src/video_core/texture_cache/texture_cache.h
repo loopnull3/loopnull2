@@ -3133,6 +3133,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     join_overlaps_found.clear();
     join_left_aliased_ids.clear();
     join_right_aliased_ids.clear();
+    join_samples_aliased_ids.clear();
     join_ignore_textures.clear();
     join_bad_overlap_ids.clear();
     join_copies_to_do.clear();
@@ -3170,19 +3171,21 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             // A multisampled target and the texture its samples are read through, twice as wide
             // with one sample: no view spans them, and left as a bad overlap the texture never
             // got what was drawn (Minecraft's 1.26.62 update resolves its 2x target with a draw
-            // that samples it so; its picture was black). Joined, the copy below carries the
-            // samples over.
+            // that samples it so; its picture was black). Aliased, SynchronizeAliases carries
+            // the samples over each time the other one is newer; alias_copy leaves the first
+            // copy to it.
             static std::atomic<u32> logged{};
             if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
                 LOG_INFO(HW_GPU,
-                         "A {}x{} image of {} samples takes over the {}x{} one of {} at {:#x}: one "
+                         "A {}x{} image of {} samples aliases the {}x{} one of {} at {:#x}: one "
                          "surface, with and without multisampling",
                          new_info.size.width, new_info.size.height, new_info.num_samples,
                          overlap.info.size.width, overlap.info.size.height,
                          overlap.info.num_samples, gpu_addr);
             }
-            join_overlap_ids.push_back(overlap_id);
-            join_copies_to_do.emplace_back(JoinCopy{false, overlap_id});
+            join_samples_aliased_ids.push_back(overlap_id);
+            overlap.flags |= ImageFlagBits::Alias;
+            join_copies_to_do.emplace_back(JoinCopy{true, overlap_id});
             return;
         }
         constexpr auto options = RelaxedOptions::Size | RelaxedOptions::Format;
@@ -3388,6 +3391,10 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         join_alias_indices.emplace(aliased_id, alias_index);
         new_image.flags |= ImageFlagBits::Alias;
     }
+    for (const ImageId aliased_id : join_samples_aliased_ids) {
+        AddSamplesAlias(new_image_base, slot_images[aliased_id], new_image_id, aliased_id);
+        new_image.flags |= ImageFlagBits::Alias;
+    }
     for (const ImageId aliased_id : join_bad_overlap_ids) {
         ImageBase& aliased = slot_images[aliased_id];
         aliased.overlapping_images.push_back(new_image_id);
@@ -3478,19 +3485,6 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const u32 down_shift = can_rescale ? resolution.down_shift : 0;
             auto copies = MakeShrinkImageCopies(new_info, overlap.info, base, up_scale, down_shift);
             if (overlap.info.num_samples != new_image.info.num_samples) {
-                // Not past what the overlap holds: the two may differ in the rows a height was
-                // aligned by (IsSameSurfaceAcrossSamples).
-                const auto [samples_x, samples_y] = SamplesLog2(new_image.info.num_samples);
-                const u32 width = (std::min)(new_info.size.width, overlap.info.size.width);
-                const u32 height = (std::min)(new_info.size.height, overlap.info.size.height);
-                for (ImageCopy& copy : copies) {
-                    copy.extent.width = (std::min)(
-                        copy.extent.width,
-                        (std::max)(((width >> samples_x) * up_scale) >> down_shift, u32{1}));
-                    copy.extent.height = (std::min)(
-                        copy.extent.height,
-                        (std::max)(((height >> samples_y) * up_scale) >> down_shift, u32{1}));
-                }
                 runtime.CopyImageMSAA(new_image, overlap, copies);
             } else {
                 runtime.CopyImage(new_image, overlap, copies);
@@ -4522,6 +4516,10 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
                 copy.extent.height = resolution.ScaleUp(copy.extent.height);
             }
         }
+    }
+    if (dst.info.num_samples != src.info.num_samples) {
+        // A samples alias (AddSamplesAlias): the extents count the destination's pixels.
+        return runtime.CopyImageMSAA(dst, src, copies);
     }
     const auto dst_format_type = GetFormatType(dst.info.format);
     const auto src_format_type = GetFormatType(src.info.format);

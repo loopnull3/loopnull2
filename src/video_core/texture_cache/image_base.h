@@ -177,6 +177,10 @@ struct ImageAllocBase {
 
 bool AddImageAlias(ImageBase& lhs, ImageBase& rhs, ImageId lhs_id, ImageId rhs_id);
 
+/// Aliases a multisampled image and the image at its address that reads its samples as texels
+/// (IsSameSurfaceAcrossSamples): one copy each way, to be made by a copy between sample counts.
+void AddSamplesAlias(ImageBase& lhs, ImageBase& rhs, ImageId lhs_id, ImageId rhs_id);
+
 /// Sets an image's modification tick and raises its aliases' newest_alias_tick to it.
 template <typename Images>
 void SetModificationTick(Images& images, ImageBase& image, u64 tick) {

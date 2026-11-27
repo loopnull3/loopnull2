@@ -7,15 +7,16 @@
 
 namespace {
 
+using VideoCommon::AddSamplesAlias;
+using VideoCommon::Extent3D;
 using VideoCommon::ImageBase;
+using VideoCommon::ImageId;
 using VideoCommon::ImageInfo;
 using VideoCommon::ImageType;
 using VideoCommon::IsSameSurfaceAcrossSamples;
 using VideoCommon::IsSubresource;
-using VideoCommon::MakeShrinkImageCopies;
 using VideoCommon::RelaxedOptions;
 using VideoCommon::ResolveOverlap;
-using VideoCommon::SubresourceBase;
 using VideoCore::Surface::PixelFormat;
 
 constexpr GPUVAddr Address = 0x412bf0000;
@@ -67,15 +68,25 @@ TEST_CASE("Other pairs are not one surface across sample counts", "[video_core][
     REQUIRE_FALSE(IsSameSurfaceAcrossSamples(depth, Address, target, false, false));
 }
 
-TEST_CASE("The copy into a multisampled target counts its pixels, not its samples",
+TEST_CASE("The two surfaces alias each other with one copy each way",
           "[video_core][texture_cache]") {
-    const auto into_texture = MakeShrinkImageCopies(Texture, Target, SubresourceBase{0, 0}, 1, 0);
+    ImageBase target(Target, Address, 0x1000);
+    ImageBase texture(Texture, Address, 0x1000);
+    // The target was drawn before the texture over it was made
+    target.modification_tick = 7;
+    AddSamplesAlias(texture, target, ImageId{2}, ImageId{1});
+    REQUIRE(texture.aliased_images.size() == 1);
+    REQUIRE(target.aliased_images.size() == 1);
+    REQUIRE(texture.aliased_images[0].id == ImageId{1});
+    REQUIRE(target.aliased_images[0].id == ImageId{2});
+    // An extent counts the pixels of the image written, and no more rows than both hold
+    const auto& into_texture = texture.aliased_images[0].copies;
     REQUIRE(into_texture.size() == 1);
-    REQUIRE(into_texture[0].extent.width == 2560);
-    REQUIRE(into_texture[0].extent.height == 720);
-    // 768 rows where the texture has 720: the join clamps it to what the source holds
-    const auto into_target = MakeShrinkImageCopies(Target, Texture, SubresourceBase{0, 0}, 1, 0);
+    REQUIRE(into_texture[0].extent == Extent3D{2560, 720, 1});
+    const auto& into_target = target.aliased_images[0].copies;
     REQUIRE(into_target.size() == 1);
-    REQUIRE(into_target[0].extent.width == 1280);
-    REQUIRE(into_target[0].extent.height == 768);
+    REQUIRE(into_target[0].extent == Extent3D{1280, 720, 1});
+    // SynchronizeAliases copies into the texture, and not back
+    REQUIRE(texture.newest_alias_tick > texture.modification_tick);
+    REQUIRE(target.newest_alias_tick <= target.modification_tick);
 }

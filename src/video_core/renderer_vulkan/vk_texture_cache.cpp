@@ -2742,6 +2742,10 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
 
     const bool msaa_to_non_msaa = src.info.num_samples > 1 && dst.info.num_samples == 1;
     const u32 num_samples = msaa_to_non_msaa ? src.info.num_samples : dst.info.num_samples;
+    if (ENABLE_MSAA_RESOLVE_CONSUME && !msaa_to_non_msaa) {
+        // The copy writes the samples and resolves nothing.
+        InvalidateResolveShadow(dst.Handle());
+    }
     if (ENABLE_MSAA_RESOLVE_CONSUME && msaa_to_non_msaa && copies.size() == 1 &&
         src.info.format == dst.info.format) {
         const VideoCommon::ImageCopy& copy = copies.front();
@@ -2857,6 +2861,9 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
             });
             return;
         }
+        if (ExpandResolveShadow(dst, src, copy, num_samples)) {
+            return;
+        }
     }
     const VkImageAspectFlags dst_aspect_mask = dst.AspectMask();
     if ((dst_aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0) {
@@ -2873,6 +2880,128 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
     }
     blit_image_helper.CopyMSAA(render_pass_cache, dst.Handle(), dst.info.format, src.Handle(),
                                src.info.format, num_samples, copies, msaa_to_non_msaa);
+}
+
+bool TextureCacheRuntime::ExpandResolveShadow(Image& dst, Image& src,
+                                              const VideoCommon::ImageCopy& copy,
+                                              u32 num_samples) {
+    // A tile-based driver had the samples discarded when the pass began with a clear (the resolve
+    // shadow holds the result), so the samples cannot be read one by one there.
+    const ResolveShadow* const shadow = GetValidResolveShadow(src.Handle());
+    if (shadow == nullptr || shadow->aspect_mask != VK_IMAGE_ASPECT_COLOR_BIT ||
+        dst.AspectMask() != VK_IMAGE_ASPECT_COLOR_BIT) {
+        return false;
+    }
+    const auto [samples_x, samples_y] = VideoCommon::SamplesLog2(static_cast<int>(num_samples));
+    const u32 width = copy.extent.width >> samples_x;
+    const u32 height = copy.extent.height >> samples_y;
+    const u32 last_layer =
+        static_cast<u32>(copy.src_subresource.base_layer + copy.src_subresource.num_layers);
+    if (copy.src_offset != VideoCommon::Offset3D{} || copy.dst_offset != VideoCommon::Offset3D{} ||
+        copy.src_subresource.base_level != 0 || width == 0 || height == 0 ||
+        width > shadow->extent.width || height > shadow->extent.height ||
+        last_layer > shadow->layers) {
+        return false;
+    }
+    if (!device.IsFormatSupported(shadow->format,
+                                  VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT,
+                                  FormatType::Optimal)) {
+        return false;
+    }
+    const VkImage shadow_image = *shadow->image;
+    const VkImage dst_image = dst.Handle();
+    // Nearest, at a whole scale: each pixel is repeated once per sample.
+    const VkImageBlit region{
+        .srcSubresource{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = static_cast<u32>(copy.src_subresource.base_layer),
+            .layerCount = static_cast<u32>(copy.src_subresource.num_layers),
+        },
+        .srcOffsets{
+            VkOffset3D{0, 0, 0},
+            VkOffset3D{static_cast<s32>(width), static_cast<s32>(height), 1},
+        },
+        .dstSubresource{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = static_cast<u32>(copy.dst_subresource.base_level),
+            .baseArrayLayer = static_cast<u32>(copy.dst_subresource.base_layer),
+            .layerCount = static_cast<u32>(copy.src_subresource.num_layers),
+        },
+        .dstOffsets{
+            VkOffset3D{0, 0, 0},
+            VkOffset3D{static_cast<s32>(width << samples_x), static_cast<s32>(height << samples_y),
+                       1},
+        },
+    };
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([shadow_image, dst_image, region](vk::CommandBuffer cmdbuf) {
+        constexpr VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                                VK_REMAINING_MIP_LEVELS, 0,
+                                                VK_REMAINING_ARRAY_LAYERS};
+        const std::array pre_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = shadow_image,
+                .subresourceRange = range,
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                 VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = dst_image,
+                .subresourceRange = range,
+            },
+        };
+        const std::array post_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = 0,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = shadow_image,
+                .subresourceRange = range,
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                 VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = dst_image,
+                .subresourceRange = range,
+            },
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               0, nullptr, nullptr, pre_barriers);
+        cmdbuf.BlitImage(shadow_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region, VK_FILTER_NEAREST);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                               0, nullptr, nullptr, post_barriers);
+    });
+    return true;
 }
 
 u64 TextureCacheRuntime::GetDeviceLocalMemory() const {

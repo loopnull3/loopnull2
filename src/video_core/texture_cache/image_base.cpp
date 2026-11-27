@@ -15,6 +15,7 @@
 #include "video_core/texture_cache/formatter.h"
 #include "video_core/texture_cache/image_base.h"
 #include "video_core/texture_cache/image_view_info.h"
+#include "video_core/texture_cache/samples_helper.h"
 #include "video_core/texture_cache/util.h"
 
 namespace VideoCommon {
@@ -258,6 +259,32 @@ bool AddImageAlias(ImageBase& lhs, ImageBase& rhs, ImageId lhs_id, ImageId rhs_i
     lhs.flags &= ~ImageFlagBits::IsRescalable;
     rhs.flags &= ~ImageFlagBits::IsRescalable;
     return true;
+}
+
+void AddSamplesAlias(ImageBase& lhs, ImageBase& rhs, ImageId lhs_id, ImageId rhs_id) {
+    // Both sizes count samples, and one height may be the aligned one. A copy's extent counts the
+    // pixels of the image it writes.
+    const u32 width = (std::min)(lhs.info.size.width, rhs.info.size.width);
+    const u32 height = (std::min)(lhs.info.size.height, rhs.info.size.height);
+    const auto copy_into = [width, height](const ImageBase& dst) {
+        const auto [samples_x, samples_y] = SamplesLog2(dst.info.num_samples);
+        const SubresourceLayers subresource{.base_level = 0, .base_layer = 0, .num_layers = 1};
+        return ImageCopy{
+            .src_subresource = subresource,
+            .dst_subresource = subresource,
+            .src_offset = Offset3D{0, 0, 0},
+            .dst_offset = Offset3D{0, 0, 0},
+            .extent = Extent3D{.width = (std::max)(width >> samples_x, u32{1}),
+                               .height = (std::max)(height >> samples_y, u32{1}),
+                               .depth = 1},
+        };
+    };
+    lhs.aliased_images.push_back(AliasedImage{.copies = {copy_into(lhs)}, .id = rhs_id});
+    rhs.aliased_images.push_back(AliasedImage{.copies = {copy_into(rhs)}, .id = lhs_id});
+    lhs.newest_alias_tick = (std::max)(lhs.newest_alias_tick, rhs.modification_tick);
+    rhs.newest_alias_tick = (std::max)(rhs.newest_alias_tick, lhs.modification_tick);
+    lhs.flags &= ~ImageFlagBits::IsRescalable;
+    rhs.flags &= ~ImageFlagBits::IsRescalable;
 }
 
 } // namespace VideoCommon

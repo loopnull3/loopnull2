@@ -179,6 +179,12 @@ public:
 
     void CopyImageMSAA(Image& dst, Image& src, std::span<const VideoCommon::ImageCopy> copies);
 
+    /// Fills an image that holds a multisampled image's samples as texels from that image's
+    /// resolve shadow: each sample takes its pixel's resolved colour. False when there is no
+    /// valid shadow or it does not cover the copy.
+    bool ExpandResolveShadow(Image& dst, Image& src, const VideoCommon::ImageCopy& copy,
+                             u32 num_samples);
+
     bool ShouldReinterpret(Image& dst, Image& src);
 
     void ReinterpretImage(Image& dst, Image& src, std::span<const VideoCommon::ImageCopy> copies);
