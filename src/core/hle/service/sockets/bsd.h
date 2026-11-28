@@ -252,8 +252,10 @@ private:
     /// to the generation of the slot.
     std::optional<FileDescriptor> CopyFileDescriptor(s32 fd, u64* generation = nullptr);
     /// CopyFileDescriptor for a socket operation; nullopt also if fd is an eventfd (logged with
-    /// the calling function's name)
-    std::optional<FileDescriptor> CopyDescriptor(s32 fd, const char* call = __builtin_FUNCTION());
+    /// the calling function's name). `error` is then what the operation fails with: NOTSOCK for
+    /// an eventfd, which is open, and BADF for a descriptor that is not.
+    std::optional<FileDescriptor> CopyDescriptor(s32 fd, Errno& error,
+                                                 const char* call = __builtin_FUNCTION());
     /// Whether the socket of descriptor at fd is blocking, from the flags fd has now. A receive
     /// or send tried with FLAG_MSG_DONTWAIT so as not to wait leaves an EAGAIN of a blocking
     /// socket to its caller to wait out.

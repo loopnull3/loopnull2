@@ -1716,9 +1716,10 @@ std::optional<std::pair<s32, Errno>> BSD_USA::SelectImpl(const SelectRequest& re
 }
 
 std::pair<s32, Errno> BSD_USA::AcceptImpl(s32 fd, std::vector<u8>& write_buffer) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return {-1, Errno::BADF};
+        return {-1, descriptor_error};
     }
 
     auto [result, bsd_errno] = descriptor->socket->Accept();
@@ -1751,9 +1752,10 @@ std::pair<s32, Errno> BSD_USA::AcceptImpl(s32 fd, std::vector<u8>& write_buffer)
 }
 
 Errno BSD_USA::BindImpl(s32 fd, std::span<const u8> addr) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
     ASSERT(addr.size() >= 16);
 
@@ -1763,9 +1765,10 @@ Errno BSD_USA::BindImpl(s32 fd, std::span<const u8> addr) {
 }
 
 Errno BSD_USA::ConnectImpl(s32 fd, std::span<const u8> addr) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
 
     ASSERT(addr.size() >= 16);
@@ -1783,9 +1786,10 @@ Errno BSD_USA::ConnectImpl(s32 fd, std::span<const u8> addr) {
 }
 
 Errno BSD_USA::GetPeerNameImpl(s32 fd, std::vector<u8>& write_buffer) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
 
     const auto [addr_in, bsd_errno] = descriptor->socket->GetPeerName();
@@ -1797,9 +1801,10 @@ Errno BSD_USA::GetPeerNameImpl(s32 fd, std::vector<u8>& write_buffer) {
 }
 
 Errno BSD_USA::GetSockNameImpl(s32 fd, std::vector<u8>& write_buffer) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
 
     const auto [addr_in, bsd_errno] = descriptor->socket->GetSockName();
@@ -1811,9 +1816,10 @@ Errno BSD_USA::GetSockNameImpl(s32 fd, std::vector<u8>& write_buffer) {
 }
 
 Errno BSD_USA::ListenImpl(s32 fd, s32 backlog) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
     return Translate(descriptor->socket->Listen(backlog));
 }
@@ -1859,9 +1865,10 @@ std::pair<s32, Errno> BSD_USA::FcntlImpl(s32 fd, FcntlCmd cmd, s32 arg) {
 }
 
 Errno BSD_USA::GetSockOptImpl(s32 fd, u32 level, OptName optname, std::vector<u8>& optval) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
 
     Network::SocketBase* const socket = descriptor->socket.get();
@@ -1916,9 +1923,10 @@ Errno BSD_USA::GetSockOptImpl(s32 fd, u32 level, OptName optname, std::vector<u8
 }
 
 Errno BSD_USA::SetSockOptImpl(s32 fd, u32 level, OptName optname, std::span<const u8> optval) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
 
     Network::SocketBase* const socket = descriptor->socket.get();
@@ -2010,18 +2018,20 @@ Errno BSD_USA::SetSockOptImpl(s32 fd, u32 level, OptName optname, std::span<cons
 }
 
 Errno BSD_USA::ShutdownImpl(s32 fd, s32 how) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return Errno::BADF;
+        return descriptor_error;
     }
     const Network::ShutdownHow host_how = Translate(static_cast<ShutdownHow>(how));
     return Translate(descriptor->socket->Shutdown(host_how));
 }
 
 std::pair<s32, Errno> BSD_USA::RecvImpl(s32 fd, u32 flags, std::vector<u8>& message) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return {-1, Errno::BADF};
+        return {-1, descriptor_error};
     }
 
     // MSG_DONTWAIT keeps this receive alone from waiting; the socket's mode is left alone, as
@@ -2031,9 +2041,10 @@ std::pair<s32, Errno> BSD_USA::RecvImpl(s32 fd, u32 flags, std::vector<u8>& mess
 
 std::pair<s32, Errno> BSD_USA::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& message,
                                         std::vector<u8>& addr) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return {-1, Errno::BADF};
+        return {-1, descriptor_error};
     }
 
     Network::SockAddrIn addr_in{};
@@ -2062,18 +2073,20 @@ std::pair<s32, Errno> BSD_USA::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& 
 }
 
 std::pair<s32, Errno> BSD_USA::SendImpl(s32 fd, u32 flags, std::span<const u8> message) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return {-1, Errno::BADF};
+        return {-1, descriptor_error};
     }
     return Translate(descriptor->socket->Send(message, flags));
 }
 
 std::pair<s32, Errno> BSD_USA::SendToImpl(s32 fd, u32 flags, std::span<const u8> message,
                                       std::span<const u8> addr) {
-    const auto descriptor = CopyDescriptor(fd);
+    Errno descriptor_error{};
+    const auto descriptor = CopyDescriptor(fd, descriptor_error);
     if (!descriptor) {
-        return {-1, Errno::BADF};
+        return {-1, descriptor_error};
     }
 
     Network::SockAddrIn addr_in;
@@ -2672,7 +2685,8 @@ std::variant<s32, Errno> BSD_USA::DuplicateSocketImpl(s32 fd) {
 }
 
 std::optional<std::shared_ptr<Network::SocketBase>> BSD_USA::GetSocket(s32 fd) {
-    if (auto descriptor = CopyDescriptor(fd)) {
+    Errno descriptor_error{};
+    if (auto descriptor = CopyDescriptor(fd, descriptor_error)) {
         return std::move(descriptor->socket);
     }
     return std::nullopt;
@@ -2705,11 +2719,16 @@ std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyFileDescriptor(s32 fd, u64* 
     return *descriptor;
 }
 
-std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyDescriptor(s32 fd, const char* call) {
+std::optional<BSD_USA::FileDescriptor> BSD_USA::CopyDescriptor(s32 fd, Errno& error,
+                                                               const char* call) {
     auto descriptor = CopyFileDescriptor(fd);
+    error = Errno::BADF;
     if (descriptor && !descriptor->socket) {
+        // Open, but not a socket: ENOTSOCK, as getsockopt(2) and the rest have it. Minecraft's
+        // 1.26.62 update asks its eventfds for a socket option.
         LOG_ERROR(Service, "File descriptor handle={} is an eventfd, not a socket (in {})", fd,
                   call);
+        error = Errno::NOTSOCK;
         return std::nullopt;
     }
     return descriptor;
