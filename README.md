@@ -260,6 +260,14 @@ The log says which controllers are connected, which player each one drives and h
 player's connection and controller type, the controller types and players the game takes, and
 what the user selection was asked and gave.
 
+## Vibration
+
+A controller vibrates with its own motor whenever Android has one for it. Player 1's vibration
+used to go to the phone by default, whatever the controller could do. The player's switch
+(Settings › Controls › a player › Vibration) now only decides what happens for a controller
+without a motor: the phone vibrates in its place (on by default for player 1, for a controller
+clipped to the phone), or nothing does. The log says which it is for each controller.
+
 ## QLaunch and a Switch 2 firmware
 
 QLaunch boots the home menu of an installed firmware. Hokkaido takes a Switch firmware, whose

@@ -773,7 +773,7 @@
     <string name="set_threshold">Set threshold</string>
     <string name="toggle_axis">Toggle axis</string>
     <string name="connected">Connected</string>
-    <string name="use_system_vibrator">Use system vibrator</string>
+    <string name="use_system_vibrator">Vibrate the phone when the controller has no motor</string>
     <string name="input_overlay">Input overlay</string>
     <string name="vibration">Vibration</string>
     <string name="vibration_strength">Vibration strength</string>

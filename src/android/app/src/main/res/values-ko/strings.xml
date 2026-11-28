@@ -439,6 +439,7 @@
     <string name="toggle_axis">axis 토글</string>
     <string name="connected">연결됨</string>
     <string name="vibration">진동</string>
+    <string name="use_system_vibrator">컨트롤러에 진동 모터가 없으면 휴대폰이 진동</string>
     <string name="profile">프로필</string>
     <string name="use_global_input_configuration">글로벌 입력 구성 사용</string>
     <!-- Miscellaneous -->

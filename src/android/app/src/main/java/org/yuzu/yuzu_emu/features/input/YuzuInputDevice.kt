@@ -8,6 +8,7 @@ import androidx.annotation.Keep
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.utils.InputHandler.getGUID
+import org.yuzu.yuzu_emu.utils.Log
 
 @Keep
 interface YuzuInputDevice {
@@ -30,10 +31,25 @@ class YuzuPhysicalDevice(
     private val port: Int,
     useSystemVibrator: Boolean
 ) : YuzuInputDevice {
-    private val vibrator = if (useSystemVibrator) {
-        YuzuVibrator.getSystemVibrator()
-    } else {
-        YuzuVibrator.getControllerVibrator(device)
+    // The controller's own motor when Android has one for it. Without one, the phone's when the
+    // player's setting says so (a controller clipped to the phone), else none. The setting used
+    // to send player 1's vibration to the phone whatever the controller could do.
+    private val vibrator: YuzuVibrator
+
+    init {
+        val own = YuzuVibrator.getControllerVibrator(device)
+        val ownMotor = own.supportsVibration()
+        vibrator = if (ownMotor || !useSystemVibrator) own else YuzuVibrator.getSystemVibrator()
+        val route = when {
+            ownMotor -> "its own motor"
+            useSystemVibrator -> "the phone's vibrator (Android has no motor for it)"
+            else -> "none (Android has no motor for it, and the player's setting leaves the " +
+                "phone's alone)"
+        }
+        // Said once for a controller and again when it changes: devices are listed often.
+        if (loggedRoutes.put(device.descriptor, route) != route) {
+            Log.info("[Input] Vibration of ${device.name} (port $port): $route")
+        }
     }
 
     override fun getName(): String {
@@ -58,6 +74,10 @@ class YuzuPhysicalDevice(
 
     override fun getAxes(): Array<Int> = device.motionRanges.map { it.axis }.toTypedArray()
     override fun hasKeys(keys: IntArray): BooleanArray = device.hasKeys(*keys)
+
+    companion object {
+        private val loggedRoutes = java.util.concurrent.ConcurrentHashMap<String, String>()
+    }
 }
 
 class YuzuInputOverlayDevice(

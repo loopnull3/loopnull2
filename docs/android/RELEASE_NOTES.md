@@ -34,6 +34,8 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **A second player:** a controller in no mapping becomes the next free player at a button
   press during a game, and a game's request for another local player's user is answered with
   a user the game allows (create a second user in Profile Manager first).
+- **Vibration goes to the controller** when it has a motor; the phone vibrates in its place
+  only for a controller without one.
 - Korean translation of everything LoopNative shows.
 
 ## LoopNative Pack (Banana Native v0.3.51, modified)
