@@ -268,6 +268,10 @@ used to go to the phone by default, whatever the controller could do. The player
 without a motor: the phone vibrates in its place (on by default for player 1, for a controller
 clipped to the phone), or nothing does. The log says which it is for each controller.
 
+Whether a controller has a motor is Android's to say (`InputDevice.getVibratorManager`). On the
+Galaxy S26 it reports none for a Nintendo Switch Pro Controller over Bluetooth, so that
+controller cannot be made to vibrate from the app there, and the phone vibrates in its place.
+
 ## QLaunch and a Switch 2 firmware
 
 QLaunch boots the home menu of an installed firmware. Hokkaido takes a Switch firmware, whose
@@ -291,6 +295,11 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
   6b1bf78): an NCA stored with a plain header under the magic `DNCA` and plain sections, as game
   converters write them. The failure dialog also shows what the first file holds where a header's
   magic is, as stored, which tells such a file from an encrypted one.
+- **A Switch 2's firmware as the console keeps it does not install.** Its files carry `NHR0` in
+  the clear where an NCA has its encrypted header (the S26's 299-file archive does), a format
+  that neither this app nor Orchid reads and that no public description was found for. The
+  dialog names it. What can be installed is a Switch firmware, or a Switch 2 firmware converted
+  to decrypted NCA files.
 - **QLaunch** boots the Switch 2's home menu when its firmware is installed, else the Switch's.
   With both, the applet list has an entry for each.
 - The home menu's own applets are looked for under `04`, a Switch 2 program is told its own

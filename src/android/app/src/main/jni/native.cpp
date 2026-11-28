@@ -1751,15 +1751,22 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
             break;
         }
     }
+    // What the file holds where a header's magic is, as stored: a file that is not encrypted
+    // has its magic there (NCA3, or DNCA for a decrypted one), an encrypted one has noise. A
+    // Switch 2's own content has NHR0 there in the clear, which nothing here reads.
+    std::array<u8, 4> stored{};
+    const bool has_stored = first_file != nullptr &&
+                            first_file->Read(stored.data(), stored.size(), 0x200) == stored.size();
+    constexpr std::array<u8, 4> Switch2Magic{'N', 'H', 'R', '0'};
+    if (has_stored && stored == Switch2Magic && reason == "HEADER") {
+        reason = "NHR0";
+    }
     g_firmware_files_problem = fmt::format("{}\n{} .nca files, {} tried", reason, files.size(), tried);
     if (first_file != nullptr) {
         g_firmware_files_problem +=
             fmt::format("\n{} ({} bytes): {}", first_file->GetName(), first_file->GetSize(),
                         Loader::GetResultStatusString(first_status));
-        // What the file holds where a header's magic is, as stored: a file that is not encrypted
-        // has its magic there (NCA3, or DNCA for a decrypted one), an encrypted one has noise.
-        std::array<u8, 4> stored{};
-        if (first_file->Read(stored.data(), stored.size(), 0x200) == stored.size()) {
+        if (has_stored) {
             const bool text = std::ranges::all_of(
                 stored, [](u8 byte) { return byte >= 0x20 && byte < 0x7f; });
             const std::string as_stored = fmt::format(
@@ -1768,6 +1775,20 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
                      : std::string{});
             LOG_ERROR(Frontend, "Firmware files: ... and as {} as it is stored", as_stored);
             g_firmware_files_problem += fmt::format("\nas stored: {}", as_stored);
+            // The header's first fields and the start of where a file system header is, for the
+            // log: whether such a file's fields are in the clear and laid out as an NCA's.
+            const auto hex_at = [&](u64 offset, size_t size) {
+                std::vector<u8> bytes(size);
+                std::string hex;
+                if (first_file->Read(bytes.data(), size, offset) == size) {
+                    for (const u8 byte : bytes) {
+                        hex += fmt::format("{:02x}", byte);
+                    }
+                }
+                return hex;
+            };
+            LOG_ERROR(Frontend, "Firmware files: stored bytes from 0x200: {}; from 0x400: {}",
+                      hex_at(0x200, 0x60), hex_at(0x400, 0x20));
         }
         for (size_t index = 0; index < reads.size(); ++index) {
             g_firmware_files_problem += fmt::format(

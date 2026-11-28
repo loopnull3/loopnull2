@@ -1989,7 +1989,7 @@ void RasterizerVulkan::Clear(u32 layer_count) {
         frame_dump.NoteEvent(
             "clear",
             fmt::format(
-                R"("rt":"{:#x}","rt_width":{},"rt_height":{},"zeta":"{:#x}","surface":{:#x},"color":[{},{},{},{}],"depth":{},"stencil":{},"use_scissor":{},"scissor":[{},{},{},{},{}],"layer":{},"layers":{})",
+                R"("rt":"{:#x}","rt_width":{},"rt_height":{},"zeta":"{:#x}","surface":"{:#x}","color":[{},{},{},{}],"depth":{},"stencil":{},"use_scissor":{},"scissor":[{},{},{},{},{}],"layer":{},"layers":{})",
                 regs.rt[regs.clear_surface.RT].Address(), regs.rt[regs.clear_surface.RT].width,
                 regs.rt[regs.clear_surface.RT].height,
                 regs.zeta_enable != 0 ? regs.zeta.Address() : 0, regs.clear_surface.raw,

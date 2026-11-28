@@ -188,6 +188,7 @@ object InstallableActions {
                             reason.getOrElse(2) { "?" }
                         )
                         "HEADER" -> activity.getString(R.string.firmware_unreadable_header)
+                        "NHR0" -> activity.getString(R.string.firmware_unreadable_switch2_format)
                         else -> activity.getString(R.string.firmware_unreadable_description)
                     }
                     Log.warning("[Firmware] not installed: ${problem.joinToString("; ")}")
