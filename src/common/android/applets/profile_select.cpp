@@ -95,6 +95,13 @@ void AndroidProfileSelect::SelectProfile(
                  users.size(), excluded);
     };
 
+    if (parameters.mode != Service::AM::Frontend::UiMode::UserSelector) {
+        // Not a selection (an account to make or to link, a name or an icon to edit): nothing
+        // here does those, and the answer stays what it was, the current user.
+        describe("not a selection, the current user");
+        callback(current);
+        return;
+    }
     if (users.empty()) {
         // Nobody is left to pick: the person is told, and the game hears a cancel.
         AskPerson(names);
