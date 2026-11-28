@@ -405,6 +405,8 @@
     <string name="firmware_installed_failure_description">Make sure the firmware nca files are at the root of the zip and try again.</string>
     <string name="firmware_no_nca_description">No .nca files were found in the zip, neither at its root nor in a folder inside it. It holds %1$d files, the first ones: %2$s</string>
     <string name="firmware_unreadable_description">The installed keys cannot open this firmware. Install the keys of the same console first, then install the firmware again. Nothing was changed.</string>
+    <string name="firmware_unreadable_header">None of the installed key files opens the headers of these files. The keys are of another kind of console than this firmware (a Switch firmware needs the keys of a Switch, a Switch 2 firmware those of a Switch 2), or these are not firmware files. Nothing was changed.</string>
+    <string name="firmware_unreadable_generation">The installed keys are older than this firmware: it needs key number %1$s and the keys go up to %2$s. Install newer keys of the same console, then install the firmware again. Nothing was changed.</string>
     <string name="firmware_uninstalled_failure">Firmware uninstallation failed</string>
     <string name="share_log">Share debug logs</string>
     <string name="share_log_description">Share Hokkaido\'s log file to debug issues</string>

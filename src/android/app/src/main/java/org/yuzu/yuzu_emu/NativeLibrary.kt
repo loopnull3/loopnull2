@@ -541,6 +541,13 @@ object NativeLibrary {
     external fun firmwareFilesPlatform(path: String): Int
 
     /**
+     * Why the last [firmwareFilesPlatform] returned 0: a first line that names the reason
+     * (HEADER, GENERATION needed newest, OTHER), then lines of detail for the dialog. Empty after
+     * a call that found a firmware.
+     */
+    external fun firmwareFilesProblem(): String
+
+    /**
      * Check if a game requires firmware to be playable.
      *
      * @param programId The game's Program ID.

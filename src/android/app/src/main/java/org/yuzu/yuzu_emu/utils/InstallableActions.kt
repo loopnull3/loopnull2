@@ -178,10 +178,24 @@ object InstallableActions {
                         )
                     )
                 } else if (platform == 0) {
+                    // What the check found goes into the dialog: a screenshot of it says why.
+                    val problem = NativeLibrary.firmwareFilesProblem().lines()
+                    val reason = problem.firstOrNull().orEmpty().split(' ')
+                    val description = when (reason.firstOrNull()) {
+                        "GENERATION" -> activity.getString(
+                            R.string.firmware_unreadable_generation,
+                            reason.getOrElse(1) { "?" },
+                            reason.getOrElse(2) { "?" }
+                        )
+                        "HEADER" -> activity.getString(R.string.firmware_unreadable_header)
+                        else -> activity.getString(R.string.firmware_unreadable_description)
+                    }
+                    Log.warning("[Firmware] not installed: ${problem.joinToString("; ")}")
                     MessageDialogFragment.newInstance(
                         activity,
                         titleId = R.string.firmware_installed_failure,
-                        descriptionId = R.string.firmware_unreadable_description
+                        descriptionString = description + "\n\n" +
+                            problem.drop(1).joinToString("\n")
                     )
                 } else {
                     // A Switch 2 firmware and a Switch firmware are kept side by side, and an
@@ -193,21 +207,31 @@ object InstallableActions {
                     val otherNames = File(lists, firmwareListName(platform != 2))
                         .takeIf { it.exists() }?.readLines()?.toSet() ?: emptySet()
                     firmwarePath.mkdirs()
+                    var removed = 0
                     if (ownList.exists()) {
                         ownList.readLines().forEach {
                             if (it.isNotEmpty() && it !in otherNames) {
                                 File(firmwarePath, it).deleteRecursively()
+                                removed++
                             }
                         }
                     } else if (platform == 1) {
                         firmwarePath.listFiles()?.forEach {
-                            if (it.name !in otherNames) it.deleteRecursively()
+                            if (it.name !in otherNames) {
+                                it.deleteRecursively()
+                                removed++
+                            }
                         }
                     }
                     names.forEach {
                         File(filesDir, it).copyRecursively(File(firmwarePath, it), overwrite = true)
                     }
                     ownList.writeText(names.joinToString("\n"))
+                    Log.info(
+                        "[Firmware] ${names.size} files of a " +
+                            (if (platform == 2) "Switch 2" else "Switch") +
+                            " firmware installed, $removed earlier ones removed"
+                    )
                     NativeLibrary.initializeSystem(true)
                     homeViewModel.setCheckKeys(true)
                     activity.getString(R.string.save_file_imported_success)

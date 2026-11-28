@@ -255,8 +255,10 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
   `prod.<hash>.keys`. Every other `*.keys` file in the keys folder is a key set too, and content
   that the main set cannot open is tried with each.
 - **Install firmware** tells the console from the first file that opens and replaces only that
-  console's files. When the installed keys open none of the files it says so and changes
-  nothing: install that console's keys first.
+  console's files. When the installed keys open none of the files it changes nothing and says
+  why: no key file is of that firmware's kind of console (the files' headers do not open), or
+  the keys are older than the firmware (the key number it needs and the newest one installed),
+  with the first file and what each key file reads its header as.
   The files are the `.nca` entries of the archive's root or of a folder inside it (other entries, a
   readme say, are left out, and one kept as a folder of parts is taken as it is); an archive with
   none says what it holds instead.

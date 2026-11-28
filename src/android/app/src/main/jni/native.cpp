@@ -184,6 +184,16 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
             custom_driver_dir.c_str(), custom_driver_name.c_str(), file_redirect_dir_, nullptr);
     }
 
+    // Which driver a session runs on is otherwise only seen from the renderer's report.
+    if (custom_driver_name.empty()) {
+        LOG_INFO(Frontend, "GPU driver: no custom driver installed, using the system's");
+    } else if (handle) {
+        LOG_INFO(Frontend, "GPU driver: custom library {} loaded", custom_driver_name);
+    } else {
+        LOG_WARNING(Frontend, "GPU driver: custom library {} did not load, using the system's",
+                    custom_driver_name);
+    }
+
     // Try to load the system driver.
     if (!handle) {
         handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
@@ -1528,10 +1538,20 @@ jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_isFirmwareAvailable(JNIEnv* env, 
 
 // For the log of a firmware that does not open: what a file's header magic and key generation read
 // as with one key set ("4e434133", NCA3, when the set's header key is the right one).
-static std::string NcaHeaderWith(const FileSys::VirtualFile& file,
-                                 const Core::Crypto::KeyManager& keys) {
+// What a firmware file's header reads as with one key set.
+struct NcaHeaderRead {
+    std::string text;
+    /// The header came out as an NCA's: the key set is of the file's kind of console.
+    bool is_nca{};
+    /// The system key area key the file needs, and the newest one the key set has.
+    u64 needed_key{};
+    s64 newest_key{-1};
+};
+
+static NcaHeaderRead ReadNcaHeaderWith(const FileSys::VirtualFile& file,
+                                       const Core::Crypto::KeyManager& keys) {
     if (!keys.HasKey(Core::Crypto::S256KeyType::Header)) {
-        return "no header key";
+        return {.text = "no header key"};
     }
     const auto key = keys.GetKey(Core::Crypto::S256KeyType::Header);
     std::array<u8, 0x10> iv{};
@@ -1539,10 +1559,38 @@ static std::string NcaHeaderWith(const FileSys::VirtualFile& file,
                                          iv.data(), iv.size(),  0x200};
     std::array<u8, 0x400> header{};
     if (storage.Read(header.data(), header.size(), 0) != header.size()) {
-        return "short file";
+        return {.text = "short file"};
     }
-    return fmt::format("{:02x}{:02x}{:02x}{:02x} (key generation {:#x} / {:#x})", header[0x200],
-                       header[0x201], header[0x202], header[0x203], header[0x206], header[0x220]);
+    NcaHeaderRead read{
+        .text = fmt::format("{:02x}{:02x}{:02x}{:02x} (key generation {:#x} / {:#x})",
+                            header[0x200], header[0x201], header[0x202], header[0x203],
+                            header[0x206], header[0x220]),
+        .is_nca = header[0x200] == 'N' && header[0x201] == 'C' && header[0x202] == 'A',
+    };
+    // A generation of 0 or 1 is the first key; any other is the key one below it.
+    const u64 generation = (std::max)(header[0x206], header[0x220]);
+    read.needed_key = generation > 0 ? generation - 1 : 0;
+    for (s64 index = 0x3f; index >= 0; --index) {
+        if (keys.HasKey(Core::Crypto::S128KeyType::KeyArea, static_cast<u64>(index),
+                        static_cast<u64>(Core::Crypto::KeyAreaKeyType::System))) {
+            read.newest_key = index;
+            break;
+        }
+    }
+    return read;
+}
+
+static std::string NcaHeaderWith(const FileSys::VirtualFile& file,
+                                 const Core::Crypto::KeyManager& keys) {
+    return ReadNcaHeaderWith(file, keys).text;
+}
+
+// Why firmwareFilesPlatform found no file that opens, for the app's dialog: a first line that
+// names the reason (HEADER, GENERATION <needed> <newest>, OTHER) and lines of detail.
+static std::string g_firmware_files_problem;
+
+jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesProblem(JNIEnv* env, jclass clazz) {
+    return Common::Android::ToJString(env, g_firmware_files_problem);
 }
 
 // The console the firmware files in a folder are for, before they are installed: the first file
@@ -1553,8 +1601,10 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
     const auto path = Common::Android::GetJString(env, jpath);
     const auto vfs = std::make_shared<FileSys::RealVfsFilesystem>();
     const auto dir = vfs->OpenDirectory(path, FileSys::OpenMode::Read);
+    g_firmware_files_problem.clear();
     if (dir == nullptr) {
         LOG_ERROR(Frontend, "Firmware files: cannot open {}", path);
+        g_firmware_files_problem = "OTHER\nthe unpacked folder could not be opened";
         return 0;
     }
     int tried = 0;
@@ -1611,6 +1661,40 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
         for (const auto& set : Core::Crypto::KeyManager::Alternates()) {
             LOG_ERROR(Frontend, "Firmware files: ... and as {} with another key file",
                       NcaHeaderWith(first_file, *set));
+        }
+    }
+    // The same for the dialog: whether any key set is of this firmware's console, and if one
+    // is, whether it is too old for the files.
+    std::vector<NcaHeaderRead> reads;
+    if (first_file != nullptr) {
+        reads.push_back(ReadNcaHeaderWith(first_file, Core::Crypto::KeyManager::Instance()));
+        for (const auto& set : Core::Crypto::KeyManager::Alternates()) {
+            reads.push_back(ReadNcaHeaderWith(first_file, *set));
+        }
+    }
+    std::string reason = first_file == nullptr ? "OTHER" : "HEADER";
+    for (const NcaHeaderRead& read : reads) {
+        if (!read.is_nca) {
+            continue;
+        }
+        reason = "OTHER";
+        if (read.newest_key < static_cast<s64>(read.needed_key)) {
+            reason = fmt::format("GENERATION {:02X} {:02X}", read.needed_key,
+                                 (std::max)(read.newest_key, s64{0}));
+            break;
+        }
+    }
+    g_firmware_files_problem = fmt::format("{}\n{} .nca files, {} tried", reason, files.size(), tried);
+    if (first_file != nullptr) {
+        g_firmware_files_problem +=
+            fmt::format("\n{} ({} bytes): {}", first_file->GetName(), first_file->GetSize(),
+                        Loader::GetResultStatusString(first_status));
+        for (size_t index = 0; index < reads.size(); ++index) {
+            g_firmware_files_problem += fmt::format(
+                "\nkey file {}: {}{}", index + 1, reads[index].text,
+                reads[index].newest_key >= 0
+                    ? fmt::format(", keys up to {:02X}", reads[index].newest_key)
+                    : std::string{});
         }
     }
     return 0;
