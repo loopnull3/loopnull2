@@ -1613,6 +1613,13 @@ SubresourceRange RenderTargetRange(ImageType type, SubresourceBase base, s32 lay
     };
 }
 
+s32 RenderTargetLayerCount(s32 layers, u32 first_layer) {
+    if (first_layer == 0 || first_layer < static_cast<u32>(layers)) {
+        return layers;
+    }
+    return layers + static_cast<s32>(first_layer);
+}
+
 bool IsSameSurfaceAcrossSamples(const ImageInfo& new_info, GPUVAddr gpu_addr,
                                 const ImageBase& overlap, bool broken_views, bool native_bgr) {
     const ImageInfo& info = overlap.info;

@@ -7,6 +7,7 @@
 namespace {
 
 using VideoCommon::ImageType;
+using VideoCommon::RenderTargetLayerCount;
 using VideoCommon::RenderTargetRange;
 using VideoCommon::SubresourceBase;
 using VideoCommon::SubresourceRange;
@@ -49,4 +50,18 @@ TEST_CASE("A render target without a base layer covers its layers from the first
         RenderTargetRange(ImageType::e3D, SubresourceBase{.level = 0, .layer = 0}, 16, 3);
     REQUIRE(volume.base.layer == 0);
     REQUIRE(volume.extent.layers == 16);
+}
+
+TEST_CASE("A layer count that does not reach the base layer counts from it",
+          "[video_core][texture_cache]") {
+    // As Mesa writes a face: the layers up to and including it
+    REQUIRE(RenderTargetLayerCount(4, 3) == 4);
+    REQUIRE(RenderTargetLayerCount(6, 0) == 6);
+    REQUIRE(RenderTargetLayerCount(1, 0) == 1);
+    // One layer from base layer 3: the image needs four, and the target is the fourth
+    REQUIRE(RenderTargetLayerCount(1, 3) == 4);
+    const SubresourceRange range = RenderTargetRange(
+        ImageType::e2D, SubresourceBase{.level = 0, .layer = 0}, RenderTargetLayerCount(1, 3), 3);
+    REQUIRE(range.base.layer == 3);
+    REQUIRE(range.extent.layers == 1);
 }

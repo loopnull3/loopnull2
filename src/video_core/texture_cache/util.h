@@ -175,6 +175,11 @@ void SwizzleImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const Ima
 [[nodiscard]] SubresourceRange RenderTargetRange(ImageType type, SubresourceBase base, s32 layers,
                                                  u32 first_layer);
 
+/// The layers a render target's image needs from the layer at the target's address: `layers`
+/// (the register) when it reaches past `first_layer`, as Mesa writes it; when it does not, it
+/// can only count from `first_layer`.
+[[nodiscard]] s32 RenderTargetLayerCount(s32 layers, u32 first_layer);
+
 /// Whether a new image and an overlap at the same address are one single-level 2D surface seen
 /// with and without multisampling (a multisampled target and the wider texture its samples are
 /// read through): the same blocks once both sizes are block aligned.

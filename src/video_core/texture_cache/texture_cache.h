@@ -3775,7 +3775,10 @@ ImageViewId TextureCache<P>::FindColorBuffer(size_t index) {
     if (rt.format == Tegra::RenderTargetFormat::NONE) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
+    ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
+    if (info.type == ImageType::e2D) {
+        info.resources.layers = RenderTargetLayerCount(info.resources.layers, rt.base_layer);
+    }
     return FindRenderTargetView(info, gpu_addr, rt.base_layer);
 }
 
@@ -3789,7 +3792,11 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
     if (gpu_addr == 0) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    if (info.type == ImageType::e2D) {
+        info.resources.layers =
+            RenderTargetLayerCount(info.resources.layers, regs.zeta_layer_offset);
+    }
     return FindRenderTargetView(info, gpu_addr, regs.zeta_layer_offset);
 }
 
