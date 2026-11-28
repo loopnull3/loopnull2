@@ -284,10 +284,19 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
 - The home menu's own applets are looked for under `04`, a Switch 2 program is told its own
   firmware's version, and the three `ns` calls a 23.5.0 home menu makes at start are answered
   (from Eglantine's `fix/qlaunch-ns-3250-3251`).
+- **Games from the home menu** (ported from [Orchid](https://github.com/MythosOfs/orchid)'s
+  "Launch Switch 2 applications from the native Home Menu"): the Switch 2 home menu lists the
+  games of the game list and starts the one you pick, as a process of its own. The app registers
+  every game its scan finds (NCA, NSP and XCI as before, and now NUP containers and loose
+  dumps by their file), and scans before the home menu boots if no scan has filled the list
+  yet. To play a game again, exit it and pick it again in the home menu; restart and program
+  switching from inside a game are not available for games started this way (Orchid's limit).
+  Orchid's `.nx` containers are not supported here, and add-on content inside a NUP is not
+  mounted for these launches.
 
 None of this has run with a Switch 2 firmware: whether the files open with this reader, and
 how far the home menu gets, a log of a first attempt will say (`System titles:` and `Keys:` lines
-at start, `Firmware files:` lines at an install).
+at start, `Firmware files:` lines at an install, `Home menu:` lines at a launch).
 
 ## Reporting problems
 
@@ -334,6 +343,9 @@ LoopNative builds on [Hokkaido](https://github.com/pavelgajdo/Hokkaido) by pavel
 continues [Lichii](https://github.com/zortos293/Lichii) by Zortos and Eglantine, Eden, yuzu and
 Sudachi, and their contributors, including Eglantine's original developer Camille LaVey. Original
 copyright notices and third-party licenses are retained.
+
+Launching games from the Switch 2 home menu is ported from
+[Orchid](https://github.com/MythosOfs/orchid) by MythosOfs (GPL-3.0), a sibling fork of Eglantine.
 
 LoopNative Pack is [Banana Native](https://git.eden-emu.dev/moceure/BananaNative) by moceure and
 its contributors (MIT licence, [src/android/banana/LICENSE](src/android/banana/LICENSE)), based on
