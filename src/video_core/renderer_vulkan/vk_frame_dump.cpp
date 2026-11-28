@@ -933,22 +933,33 @@ void FrameDump::Write(const Job& job) {
         std::array<u64, 4> infs{};
         const bool encode = target.depth_encoding == DepthEncoding::None && IsFloat(target.format);
         std::vector<u8> rgb(pixels * 3);
-        // Large pictures get a map of 32x32 texel cells: black ones show a picture lost in tiles.
+        // Large pictures get a map of 32x32 texel cells: black ones, and ones of a single colour
+        // (what a target was cleared to), show a picture lost in tiles.
         const bool map_cells =
             target.depth == 1 && target.width >= 512 && target.height >= 256 && channels >= 3;
         cell_cols = map_cells ? (target.width + CELL - 1) / CELL : 0;
         const u32 cell_rows = map_cells ? (target.height + CELL - 1) / CELL : 0;
         cells.assign(size_t{cell_cols} * cell_rows, 0);
+        std::vector<std::array<float, 4>> cell_first(cells.size());
         for (size_t index = 0; index < pixels; ++index) {
             Decode(target, data.data() + index * bytes_per_pixel, pixel);
             if (map_cells) {
-                // Bit 0: a texel with colour; bit 1: one with alpha; bit 2: one without.
-                u8& cell = cells[(index / target.width / CELL) * cell_cols +
-                                 (index % target.width) / CELL];
+                // Bit 0: a texel with colour; bit 1: one with alpha; bit 2: one without; bit 3:
+                // a texel was seen; bit 4: one that differs from the first.
+                const size_t cell_index = (index / target.width / CELL) * cell_cols +
+                                          (index % target.width) / CELL;
+                u8& cell = cells[cell_index];
                 if (pixel[0] != 0.0f || pixel[1] != 0.0f || pixel[2] != 0.0f) {
                     cell |= 1;
                 }
                 cell |= channels < 4 || pixel[3] != 0.0f ? 2 : 4;
+                if ((cell & 8) == 0) {
+                    cell |= 8;
+                    cell_first[cell_index] = pixel;
+                } else if (!std::equal(pixel.begin(), pixel.begin() + channels,
+                                       cell_first[cell_index].begin())) {
+                    cell |= 16;
+                }
             }
             bool finite = true;
             for (int c = 0; c < channels; ++c) {
@@ -1006,14 +1017,18 @@ void FrameDump::Write(const Job& job) {
         job.name, job.tags, target.format, target.width, target.height, target.depth,
         target.level, target.layer, target.gpu_addr, HandleValue(target.image), target.samples,
         target.rescaled, static_cast<u32>(target.depth_encoding), job.name, png, stats));
-    // '#': black with alpha, 'o': all zero, '+': black, some of it with alpha, '.': a picture.
-    if (std::ranges::any_of(cells, [](u8 cell) { return (cell & 1) == 0; })) {
+    // '#': black with alpha, 'o': all zero, '+': black, some of it with alpha, 'f': one colour
+    // throughout, '.': a picture.
+    if (std::ranges::any_of(cells, [](u8 cell) { return (cell & 1) == 0 || (cell & 16) == 0; })) {
         std::string map;
         for (size_t first = 0; first < cells.size(); first += cell_cols) {
             map += first == 0 ? "\"" : ",\"";
             for (size_t index = first; index < first + cell_cols; ++index) {
                 const u8 cell = cells[index];
-                map += (cell & 1) != 0 ? '.' : (cell & 6) == 2 ? '#' : (cell & 6) == 4 ? 'o' : '+';
+                map += (cell & 1) != 0   ? ((cell & 16) != 0 ? '.' : 'f')
+                       : (cell & 6) == 2 ? '#'
+                       : (cell & 6) == 4 ? 'o'
+                                         : '+';
             }
             map += '"';
         }

@@ -271,17 +271,14 @@ would be the console's own program, as upstream has it; on the S26 that program 
 fatal error at its start and the game waited for it for good, so on Android the list is the
 default (`player_select_applet_mode`).
 
-Minecraft itself. On the S26 the second player picked a user, the game signed that user in and
-then asked for a user again, nine times in a minute: the second player did not stay. Players of
-the console describe the same ("after picking a second user from the menu, the game freezes for
-a moment, and immediately removes the second player") and quote the game's own message for it:
-without a Nintendo Switch Online membership, two players on one screen need the world's
-"Multiplayer Game" switch off. An emulator has no membership. The switch is in the world's
-settings, reached from the list of worlds (the pencil next to the world, then Multiplayer);
-inside a running world it is greyed out. So: switch it off there, enter the world, press + on
-the second controller and pick the second user. Sources disagree on whether the split screen
-needs TV mode, so if the second player still does not stay, set docked mode. Not tried on the
-S26 yet.
+Minecraft itself. On the S26 the second player first did not stay: the game signed the picked
+user in and then asked for a user again, nine times in a minute. Once each user was answered
+an account id of its own, the next try had a single request and both players' views on one
+screen: enter the world, press + on the second controller and pick the second user. The
+world's "Multiplayer Game" switch was off and greyed out there, which is how the game has it
+without an internet connection; players of the console say two players on one screen need it
+off when there is no Nintendo Switch Online membership, so leave it. The picture of the two
+views is not right yet on the S26 (tiles across the lower view, no HUD in the upper one).
 
 The log says which controllers are connected, which player each one drives and how, each
 player's connection and controller type, the controller types and players the game takes, and

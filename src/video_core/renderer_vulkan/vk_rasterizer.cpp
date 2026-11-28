@@ -2007,17 +2007,24 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     if (frame_dump.Capturing()) {
         FrameDumpPass(framebuffer);
         const auto& scissor = regs.scissor_test[0];
+        // The control word whole, with what its other bits would clip the clear to (the clear
+        // rectangle, viewport 0): only its scissor bit is acted on.
+        const auto& clip = regs.viewports[0];
         frame_dump.NoteEvent(
             "clear",
             fmt::format(
-                R"("rt":"{:#x}","rt_width":{},"rt_height":{},"zeta":"{:#x}","surface":"{:#x}","color":[{},{},{},{}],"depth":{},"stencil":{},"use_scissor":{},"scissor":[{},{},{},{},{}],"layer":{},"layers":{})",
+                R"("rt":"{:#x}","rt_width":{},"rt_height":{},"zeta":"{:#x}","surface":"{:#x}","color":[{},{},{},{}],"depth":{},"stencil":{},"control":"{:#x}","use_scissor":{},"scissor":[{},{},{},{},{}],"clear_rect":[{},{},{},{}],"viewport0":[{},{},{},{}],"layer":{},"layers":{})",
                 regs.rt[regs.clear_surface.RT].Address(), regs.rt[regs.clear_surface.RT].width,
                 regs.rt[regs.clear_surface.RT].height,
                 regs.zeta_enable != 0 ? regs.zeta.Address() : 0, regs.clear_surface.raw,
                 regs.clear_color[0], regs.clear_color[1], regs.clear_color[2],
                 regs.clear_color[3], regs.clear_depth, regs.clear_stencil,
+                regs.reg_array[offsetof(Maxwell, clear_control) / sizeof(u32)],
                 regs.clear_control.use_scissor != 0, scissor.enable != 0, scissor.min_x.Value(),
                 scissor.max_x.Value(), scissor.min_y.Value(), scissor.max_y.Value(),
+                regs.clear_rect.x_min.Value(), regs.clear_rect.x_max.Value(),
+                regs.clear_rect.y_min.Value(), regs.clear_rect.y_max.Value(), clip.x.Value(),
+                clip.y.Value(), clip.width.Value(), clip.height.Value(),
                 regs.clear_surface.layer.Value(), layer_count));
     }
     const VkExtent2D render_area = framebuffer->RenderArea();

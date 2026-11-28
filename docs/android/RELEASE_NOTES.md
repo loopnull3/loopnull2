@@ -35,9 +35,9 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   press during a game. When a game asks which user a player is (Minecraft, at + on the second
   controller), a list asks who is playing and the game gets the pick (create a second user in
   Profile Manager first); closing the list is a cancel. The game runs on while the list is up.
-  In Minecraft, switch the world's "Multiplayer Game" off first (list of worlds, the pencil
-  next to the world, Multiplayer): with it on the game wants an online membership for the
-  second player and removes them.
+  Each user has an account id of its own: Minecraft, told the first player's for the second,
+  did not keep the second player. Two players on one screen work on the S26 now (the picture
+  has faults still).
 - **Cache storage size:** a game that asks how large the cache storage it created is gets
   that size, not zero (Minecraft asks at start).
 - **Vibration goes to the controller** when it has a motor; the phone vibrates in its place
