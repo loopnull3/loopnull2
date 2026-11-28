@@ -47,6 +47,10 @@ public:
     void WriteSaveDataSize(SaveDataType type, u64 title_id, u128 user_id,
                            SaveDataSize new_value) const;
 
+    /// The size a title's cache storage of an index was created with: zeros when none was.
+    SaveDataSize ReadCacheStorageSize(u64 title_id, u16 index) const;
+    void WriteCacheStorageSize(u64 title_id, u16 index, SaveDataSize new_value) const;
+
     void SetAutoCreate(bool state);
 
 private:

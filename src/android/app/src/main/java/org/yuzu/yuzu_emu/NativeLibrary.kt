@@ -510,6 +510,73 @@ object NativeLibrary {
         WebBrowser.openExternal(url)
     }
 
+    private val selectUserLock = Object()
+    private var selectUserDone = false
+    private var selectUserResult = -1
+
+    /**
+     * A game's user selection: asks who is playing and blocks until a user is picked. A second
+     * local player picks their own user here.
+     *
+     * @param names The users that can be picked. Empty when none is left: the person is told so.
+     * @return The picked user's index, -1 when the list was closed, -2 when no list could be shown
+     */
+    @Keep
+    @JvmStatic
+    fun selectUser(names: Array<String>): Int {
+        val activity = sEmulationActivity.get() ?: return -2
+        if (names.isEmpty()) {
+            activity.runOnUiThread {
+                android.widget.Toast.makeText(
+                    activity,
+                    R.string.select_user_none,
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+            return -1
+        }
+        synchronized(selectUserLock) {
+            selectUserDone = false
+            selectUserResult = -1
+        }
+        activity.runOnUiThread {
+            if (activity.isFinishing || activity.isDestroyed) {
+                finishSelectUser(-2)
+                return@runOnUiThread
+            }
+            var picked = -1
+            try {
+                MaterialAlertDialogBuilder(activity)
+                    .setTitle(R.string.select_user_title)
+                    .setItems(names) { _: DialogInterface?, which: Int -> picked = which }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setOnDismissListener { finishSelectUser(picked) }
+                    .show()
+            } catch (e: Exception) {
+                Log.error("[NativeLibrary] User selection could not be shown: ${e.message}")
+                finishSelectUser(-2)
+            }
+        }
+        synchronized(selectUserLock) {
+            while (!selectUserDone) {
+                // The activity can go away under the list: the game is not left waiting.
+                if (activity.isDestroyed) {
+                    return -1
+                }
+                selectUserLock.wait(500)
+            }
+            return selectUserResult
+        }
+    }
+
+    private fun finishSelectUser(result: Int) {
+        synchronized(selectUserLock) {
+            selectUserResult = result
+            selectUserDone = true
+            selectUserLock.notifyAll()
+        }
+    }
+
     /**
      * Sets the cabinet mode for launching the cabinet applet.
      *

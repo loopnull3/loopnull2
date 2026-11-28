@@ -189,6 +189,8 @@ if(ANDROID)
         android/id_cache.h
         android/multiplayer/multiplayer.cpp
         android/multiplayer/multiplayer.h
+        android/applets/profile_select.cpp
+        android/applets/profile_select.h
         android/applets/software_keyboard.cpp
         android/applets/software_keyboard.h
         android/applets/web_browser.cpp

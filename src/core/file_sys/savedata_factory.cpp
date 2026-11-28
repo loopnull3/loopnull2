@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string>
+#include <string_view>
+
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/logging.h"
@@ -182,6 +185,49 @@ void SaveDataFactory::WriteSaveDataSize(SaveDataType type, u64 title_id, u128 us
         return;
     }
 
+    size_file->Resize(sizeof(SaveDataSize));
+    size_file->WriteObject(new_value);
+}
+
+namespace {
+
+// Beside the cache storages, not inside one: a game lists what its storage holds.
+constexpr std::string_view CacheStorageSizeDirectory = "/user/save/cache/sizes";
+
+std::string CacheStorageSizeFileName(u64 title_id, u16 index) {
+    return fmt::format("{:016X}_{}", title_id, index);
+}
+
+} // Anonymous namespace
+
+SaveDataSize SaveDataFactory::ReadCacheStorageSize(u64 title_id, u16 index) const {
+    const auto size_dir = dir->GetDirectoryRelative(CacheStorageSizeDirectory);
+    if (size_dir == nullptr) {
+        return {0, 0};
+    }
+    const auto size_file = size_dir->GetFile(CacheStorageSizeFileName(title_id, index));
+    SaveDataSize out{};
+    if (size_file == nullptr || size_file->GetSize() < sizeof(SaveDataSize) ||
+        size_file->ReadObject(&out) != sizeof(SaveDataSize)) {
+        return {0, 0};
+    }
+    return out;
+}
+
+void SaveDataFactory::WriteCacheStorageSize(u64 title_id, u16 index,
+                                            SaveDataSize new_value) const {
+    const auto size_dir = GetOrCreateDirectoryRelative(dir, CacheStorageSizeDirectory);
+    if (size_dir == nullptr) {
+        return;
+    }
+    const auto name = CacheStorageSizeFileName(title_id, index);
+    auto size_file = size_dir->GetFile(name);
+    if (size_file == nullptr) {
+        size_file = size_dir->CreateFile(name);
+    }
+    if (size_file == nullptr) {
+        return;
+    }
     size_file->Resize(sizeof(SaveDataSize));
     size_file->WriteObject(new_value);
 }

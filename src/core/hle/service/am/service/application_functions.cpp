@@ -284,8 +284,14 @@ Result IApplicationFunctions::GetSaveDataSize(Out<u64> out_normal_size, Out<u64>
 Result IApplicationFunctions::CreateCacheStorage(Out<u32> out_target_media,
                                                  Out<u64> out_required_size, u16 index,
                                                  u64 normal_size, u64 journal_size) {
-    LOG_WARNING(Service_AM, "(STUBBED) called with index={} size={:#x} journal_size={:#x}", index,
-                normal_size, journal_size);
+    LOG_INFO(Service_AM, "called with index={} size={:#x} journal_size={:#x}", index,
+             normal_size, journal_size);
+
+    // The storage itself is a folder made when it is first opened. Its size is kept, for the
+    // game that asks how large its storage is (fsp-srv GetCacheStorageSize): Minecraft does,
+    // right after creating its two.
+    system.GetFileSystemController().OpenSaveDataController()->WriteCacheStorageSize(
+        m_applet->program_id, index, {normal_size, journal_size});
 
     *out_target_media = 1; // Nand
     *out_required_size = 0;

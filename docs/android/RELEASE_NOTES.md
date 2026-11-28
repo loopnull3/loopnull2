@@ -32,8 +32,11 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   Android lists as two controllers. Controller ports no longer depend on the order the
   controllers connected in.
 - **A second player:** a controller in no mapping becomes the next free player at a button
-  press during a game, and a game's request for another local player's user is answered with
-  a user the game allows (create a second user in Profile Manager first).
+  press during a game. When a game asks which user a player is (Minecraft, at + on the second
+  controller), a list asks who is playing and the game gets the pick (create a second user in
+  Profile Manager first).
+- **Cache storage size:** a game that asks how large the cache storage it created is gets
+  that size, not zero (Minecraft asks at start).
 - **Vibration goes to the controller** when it has a motor; the phone vibrates in its place
   only for a controller without one.
 - Korean translation of everything LoopNative shows.

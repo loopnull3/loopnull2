@@ -7,7 +7,9 @@
 #include <cinttypes>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/file_sys/content_archive.h"
+#include "core/file_sys/control_metadata.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/fs_directory.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -40,6 +43,7 @@
 #include "core/hle/service/filesystem/fsp/save_data_transfer_prohibiter.h"
 #include "core/hle/service/filesystem/romfs_controller.h"
 #include "core/hle/service/filesystem/save_data_controller.h"
+#include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/hle_ipc.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/loader/loader.h"
@@ -636,10 +640,34 @@ Result FSP_SRV::ExtendSaveDataFileSystem(FileSys::SaveDataSpaceId space_id, u64 
 }
 
 Result FSP_SRV::GetCacheStorageSize(s32 index, Out<s64> out_data_size, Out<s64> out_journal_size) {
-    LOG_WARNING(Service_FS, "(STUBBED) called with index={}", index);
+    // The size the storage was created with (am CreateCacheStorage), else the one the title's
+    // control data has the system create, else none as before. The answer was always none, and
+    // a game takes that for a storage with no room: Minecraft asks about each of its two.
+    FileSys::SaveDataSize size{};
+    std::string_view source = "none recorded";
+    if (index >= 0 && index <= 0xFFFF) {
+        size = save_data_controller->ReadCacheStorageSize(program_id, static_cast<u16>(index));
+        if (size.normal != 0 || size.journal != 0) {
+            source = "as created";
+        }
+    }
+    if (size.normal == 0 && size.journal == 0 && index == 0) {
+        std::vector<u8> nacp;
+        if (system.GetARPManager().GetControlProperty(&nacp, program_id).IsSuccess() &&
+            nacp.size() >= sizeof(FileSys::RawNACP)) {
+            auto raw_nacp = std::make_unique<FileSys::RawNACP>();
+            std::memcpy(raw_nacp.get(), nacp.data(), sizeof(*raw_nacp));
+            size = {raw_nacp->cache_storage_size, raw_nacp->cache_storage_journal_size};
+            if (size.normal != 0 || size.journal != 0) {
+                source = "the control data's";
+            }
+        }
+    }
+    LOG_INFO(Service_FS, "Cache storage {}: data {:#x}, journal {:#x} ({})", index, size.normal,
+             size.journal, source);
 
-    *out_data_size = 0;
-    *out_journal_size = 0;
+    *out_data_size = static_cast<s64>(size.normal);
+    *out_journal_size = static_cast<s64>(size.journal);
 
     R_SUCCEED();
 }

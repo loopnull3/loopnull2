@@ -95,6 +95,15 @@ void SaveDataController::WriteSaveDataSize(FileSys::SaveDataType type, u64 title
     factory->WriteSaveDataSize(type, title_id, user_id, new_value);
 }
 
+FileSys::SaveDataSize SaveDataController::ReadCacheStorageSize(u64 title_id, u16 index) {
+    return factory->ReadCacheStorageSize(title_id, index);
+}
+
+void SaveDataController::WriteCacheStorageSize(u64 title_id, u16 index,
+                                               FileSys::SaveDataSize new_value) {
+    factory->WriteCacheStorageSize(title_id, index, new_value);
+}
+
 void SaveDataController::SetAutoCreate(bool state) {
     factory->SetAutoCreate(state);
 }

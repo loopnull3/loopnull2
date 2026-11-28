@@ -775,6 +775,8 @@
     <string name="toggle_axis">Toggle axis</string>
     <string name="connected">Connected</string>
     <string name="use_system_vibrator">Vibrate the phone when the controller has no motor</string>
+    <string name="select_user_title">Who is playing?</string>
+    <string name="select_user_none">This player needs a user of their own. Add a user in Profile Manager.</string>
     <string name="input_overlay">Input overlay</string>
     <string name="vibration">Vibration</string>
     <string name="vibration_strength">Vibration strength</string>

@@ -80,6 +80,7 @@ extern "C" {
 #include "core/frontend/applets/profile_select.h"
 #include "core/frontend/applets/software_keyboard.h"
 #include "core/frontend/applets/web_browser.h"
+#include "common/android/applets/profile_select.h"
 #include "common/android/applets/web_browser.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -408,7 +409,7 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
         nullptr,                     // Mii Editor
         nullptr,                     // Parental Controls
         nullptr,                     // Photo Viewer
-        nullptr,                     // Profile Selector
+        std::make_unique<Common::Android::ProfileSelect::AndroidProfileSelect>(),
         std::move(android_keyboard), // Software Keyboard
         std::move(android_webapplet),// Web Browser
         nullptr,                     // Net Connect

@@ -251,10 +251,17 @@ not saved: Settings › Controls gives a player its controller for good. One Joy
 not made a player on its own. A controller that a saved mapping names keeps the port the
 mapping names, whichever other controllers are connected.
 
-A game that adds a local player asks which user that player is (Minecraft does), and does not
-take a user who is already playing. Nobody is asked on Android: the current user is given, or,
-when the game excludes that one, the first other user it allows. So a second local player
-needs a second user: create one in Profile Manager before the game.
+A game that adds a local player asks which user that player is (Minecraft does, when the
+second controller presses +), and does not take a user who is already playing. With several
+users a list asks who is playing, as the console does, and the person picks; the users the game
+excludes are left out of it. With one user that can be picked there is no list. So a second
+local player needs a second user: create one in Profile Manager before the game.
+
+Minecraft itself, as players of the console describe it: the world's "Multiplayer Game" switch
+is the online play, which asks for a Nintendo Switch Online membership (an emulator has none),
+and two players on one screen do not need it. Enter the world, press + on the second
+controller and pick the second user. They also report the split screen in TV mode, so if the
+second player does not join in handheld mode, set docked mode. None of this has run here.
 
 The log says which controllers are connected, which player each one drives and how, each
 player's connection and controller type, the controller types and players the game takes, and
