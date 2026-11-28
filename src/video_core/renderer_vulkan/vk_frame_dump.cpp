@@ -446,9 +446,10 @@ bool FrameDump::RecordSampled(const Sampled& texture, u32 index, std::string nam
         // Every layer of a cube or a small array (Minecraft's title background showed one face of
         // six).
         constexpr s32 MaxLayers = 8;
-        if (info.type != VideoCommon::ImageType::e3D && range.extent.layers > 1 &&
-            range.extent.layers <= MaxLayers) {
-            for (s32 layer = 1; layer < range.extent.layers; ++layer) {
+        const s32 layers =
+            (std::min)(range.extent.layers, info.resources.layers - range.base.layer);
+        if (info.type != VideoCommon::ImageType::e3D && layers > 1 && layers <= MaxLayers) {
+            for (s32 layer = 1; layer < layers; ++layer) {
                 Target other = *target;
                 other.layer += layer;
                 recorded |= Record(other, fmt::format("{}_layer{}", name, layer), tags);

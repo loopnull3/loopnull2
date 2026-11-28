@@ -513,7 +513,9 @@ private:
     [[nodiscard]] ImageViewId FindDepthBuffer();
 
     /// Find or create a view for a render target with the given image parameters
-    [[nodiscard]] ImageViewId FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr);
+    /// `first_layer` is the target's base layer register (RenderTargetRange).
+    [[nodiscard]] ImageViewId FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr,
+                                                   u32 first_layer = 0);
 
     /// Iterates over all the images in a region calling func
     template <typename Func>

@@ -1629,6 +1629,21 @@ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
 
     Image& dst_image = slot_images[dst_id];
     Image& src_image = slot_images[src_id];
+    if (Settings::GetDebugKnobAt(0) && dst_image.info.type == ImageType::e2D &&
+        dst_image.info.resources.layers >= 2 && dst_image.info.resources.layers <= 16) {
+        // Debug knob 1: 2D-engine copies into a cube or a small array.
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 32) {
+            const auto found = dst_image.TryFindBase(dst.Address());
+            LOG_INFO(HW_GPU,
+                     "2D copy to {:#x} ({}x{}, depth {}, layer {}) from {:#x} lands in the {}x{} "
+                     "image of {} layers at {:#x}: level {}, layer {}",
+                     dst.Address(), dst.width, dst.height, dst.depth, dst.layer, src.Address(),
+                     dst_image.info.size.width, dst_image.info.size.height,
+                     dst_image.info.resources.layers, dst_image.gpu_addr,
+                     found ? found->level : -1, found ? found->layer : -1);
+        }
+    }
     if (True(dst_image.flags & ImageFlagBits::Unbacked)) {
         static u32 logged{};
         if (logged++ < 64) {
@@ -3761,7 +3776,7 @@ ImageViewId TextureCache<P>::FindColorBuffer(size_t index) {
         return ImageViewId{};
     }
     const ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
-    return FindRenderTargetView(info, gpu_addr);
+    return FindRenderTargetView(info, gpu_addr, rt.base_layer);
 }
 
 template <class P>
@@ -3775,11 +3790,12 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
         return ImageViewId{};
     }
     const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
-    return FindRenderTargetView(info, gpu_addr);
+    return FindRenderTargetView(info, gpu_addr, regs.zeta_layer_offset);
 }
 
 template <class P>
-ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr) {
+ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr,
+                                                  u32 first_layer) {
     static constexpr u32 MaxRenderTargetSize = 32768;
     static constexpr s32 MaxRenderTargetLayers = 2048;
     if (info.size.width == 0 || info.size.height == 0 || info.size.width > MaxRenderTargetSize ||
@@ -3829,10 +3845,26 @@ ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAdd
                      image.gpu_addr, gpu_addr, info.size.width, info.size.height, base.level, base.layer);
         }
     }
-    const SubresourceRange range{
-        .base = base,
-        .extent = {.levels = 1, .layers = layers},
-    };
+    // A cube's face is drawn with the cube's address and the face as the base layer (Minecraft's
+    // 1.26.62 update fills its title background so): all six went into the first face while the
+    // register was not read.
+    const SubresourceRange range = RenderTargetRange(image.info.type, base, layers, first_layer);
+    if (Settings::GetDebugKnobAt(0) &&
+        (first_layer != 0 || (image.info.type == ImageType::e2D &&
+                              image.info.resources.layers >= 2 &&
+                              image.info.resources.layers <= 16))) {
+        // Debug knob 1: targets that name a first layer, and targets in a cube or a small array.
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 64) {
+            LOG_INFO(HW_GPU,
+                     "Render target at {:#x}: {}x{}, {} layers, the first one {} (format {}, layer "
+                     "stride {:#x}): layers {} to {} of the {}x{} image of {} layers at {:#x}",
+                     gpu_addr, info.size.width, info.size.height, layers, first_layer,
+                     static_cast<u32>(info.format), info.layer_stride, range.base.layer,
+                     range.base.layer + range.extent.layers - 1, image.info.size.width,
+                     image.info.size.height, image.info.resources.layers, image.gpu_addr);
+        }
+    }
     return FindOrEmplaceImageView(image_id, ImageViewInfo(view_type, info.format, range));
 }
 

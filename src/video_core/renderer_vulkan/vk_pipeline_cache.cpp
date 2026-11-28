@@ -2135,6 +2135,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         Shader::IR::Program& program{programs[index]};
         const size_t stage_index{index - 1};
         infos[stage_index] = &program.info;
+        if (program.info.stores[Shader::IR::Attribute::Layer] && Settings::GetDebugKnobAt(0)) {
+            // Debug knob 1: programs that choose the target's layer themselves.
+            static std::atomic<u32> logged{};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+                LOG_INFO(Render_Vulkan, "Program {:016x} (stage {}) writes the render target layer",
+                         key.unique_hashes[index], stage_index);
+            }
+        }
 
         auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage, device)};
         if (mesh_emulation && (program.stage == Shader::Stage::Mesh ||

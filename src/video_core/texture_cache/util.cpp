@@ -1600,6 +1600,19 @@ std::optional<OverlapResult> ResolveOverlap(const ImageInfo& new_info, GPUVAddr 
     return ResolveOverlapLeftAddress(new_info, gpu_addr, cpu_addr, overlap, strict_size);
 }
 
+SubresourceRange RenderTargetRange(ImageType type, SubresourceBase base, s32 layers,
+                                   u32 first_layer) {
+    // Only arrays and cubes: a volume's slices and a linear image are left as they were.
+    s32 first = 0;
+    if (type == ImageType::e2D && first_layer > 0 && first_layer < static_cast<u32>(layers)) {
+        first = static_cast<s32>(first_layer);
+    }
+    return SubresourceRange{
+        .base = {.level = base.level, .layer = base.layer + first},
+        .extent = {.levels = 1, .layers = layers - first},
+    };
+}
+
 bool IsSameSurfaceAcrossSamples(const ImageInfo& new_info, GPUVAddr gpu_addr,
                                 const ImageBase& overlap, bool broken_views, bool native_bgr) {
     const ImageInfo& info = overlap.info;

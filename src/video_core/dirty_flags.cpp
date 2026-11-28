@@ -57,6 +57,7 @@ void SetupDirtyRenderTargets(Maxwell3D::DirtyState::Tables& tables) {
         table[OFF(zeta_enable)] = flag;
         table[OFF(zeta_size.width)] = flag;
         table[OFF(zeta_size.height)] = flag;
+        table[OFF(zeta_layer_offset)] = flag;
         FillBlock(table, OFF(zeta), NUM(zeta), flag);
     }
 }

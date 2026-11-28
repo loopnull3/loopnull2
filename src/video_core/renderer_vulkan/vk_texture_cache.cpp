@@ -5290,6 +5290,17 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
          runtime.device.GetMaxFramebufferLayers()});
     render_area = VkExtent2D{.width = size.width, .height = size.height};
     layers = size.layers;
+    if (Settings::GetDebugKnobAt(0) && color_buffers[0] != nullptr &&
+        (layers > 1 || color_buffers[0]->range.extent.layers > 1)) {
+        // Debug knob 1: framebuffers over arrays, and how many layers each attachment brought.
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 24) {
+            LOG_INFO(Render_Vulkan,
+                     "Framebuffer of {} layers: colour target 0 has {}, the depth target {}", layers,
+                     color_buffers[0]->range.extent.layers,
+                     depth_buffer != nullptr ? depth_buffer->range.extent.layers : 0);
+        }
+    }
 
     if (do_resolve_color) {
         for (size_t index = 0; index < NUM_RT; ++index) {
