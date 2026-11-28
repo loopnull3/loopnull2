@@ -511,20 +511,28 @@ object NativeLibrary {
     }
 
     private val selectUserLock = Object()
-    private var selectUserDone = false
-    private var selectUserResult = -1
+
+    /** The newest request whose list came up, and the newest given up before its list did. */
+    private var selectUserShown = 0
+    private var selectUserGivenUp = 0
 
     /**
-     * A game's user selection: asks who is playing and blocks until a user is picked. A second
-     * local player picks their own user here.
+     * A game's user selection: shows the list of users that can be picked. The game is not held
+     * meanwhile; the answer goes back through [userSelected] when the list closes. A second local
+     * player picks their own user here.
      *
      * @param names The users that can be picked. Empty when none is left: the person is told so.
-     * @return The picked user's index, -1 when the list was closed, -2 when no list could be shown
+     * @param request Names the selection in the answer.
+     * @return false when no list came up (within two seconds): no answer will follow.
      */
     @Keep
     @JvmStatic
-    fun selectUser(names: Array<String>): Int {
-        val activity = sEmulationActivity.get() ?: return -2
+    fun selectUser(names: Array<String>, request: Int): Boolean {
+        val activity = sEmulationActivity.get()
+        if (activity == null) {
+            Log.warning("[UserSelect] request $request: no emulation activity")
+            return false
+        }
         if (names.isEmpty()) {
             activity.runOnUiThread {
                 android.widget.Toast.makeText(
@@ -533,49 +541,90 @@ object NativeLibrary {
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
-            return -1
+            return false
         }
+        Log.info("[UserSelect] request $request: a list of ${names.size} users is asked for")
+        activity.runOnUiThread { showUserList(activity, names, request) }
+        // The list comes up on the UI thread. If that thread does not get to it, nobody can be
+        // asked, and the caller must not wait for an answer.
+        val deadline = android.os.SystemClock.uptimeMillis() + 2000
         synchronized(selectUserLock) {
-            selectUserDone = false
-            selectUserResult = -1
-        }
-        activity.runOnUiThread {
-            if (activity.isFinishing || activity.isDestroyed) {
-                finishSelectUser(-2)
-                return@runOnUiThread
-            }
-            var picked = -1
-            try {
-                MaterialAlertDialogBuilder(activity)
-                    .setTitle(R.string.select_user_title)
-                    .setItems(names) { _: DialogInterface?, which: Int -> picked = which }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .setOnDismissListener { finishSelectUser(picked) }
-                    .show()
-            } catch (e: Exception) {
-                Log.error("[NativeLibrary] User selection could not be shown: ${e.message}")
-                finishSelectUser(-2)
-            }
-        }
-        synchronized(selectUserLock) {
-            while (!selectUserDone) {
-                // The activity can go away under the list: the game is not left waiting.
-                if (activity.isDestroyed) {
-                    return -1
+            while (selectUserShown < request) {
+                val left = deadline - android.os.SystemClock.uptimeMillis()
+                if (left <= 0 || selectUserGivenUp >= request) {
+                    selectUserGivenUp = maxOf(selectUserGivenUp, request)
+                    Log.warning("[UserSelect] request $request: the list did not come up")
+                    return false
                 }
-                selectUserLock.wait(500)
+                selectUserLock.wait(left)
             }
-            return selectUserResult
+        }
+        return true
+    }
+
+    private fun showUserList(activity: EmulationActivity, names: Array<String>, request: Int) {
+        val giveUp = {
+            synchronized(selectUserLock) {
+                selectUserGivenUp = maxOf(selectUserGivenUp, request)
+                selectUserLock.notifyAll()
+            }
+        }
+        synchronized(selectUserLock) {
+            if (selectUserGivenUp >= request) {
+                return
+            }
+        }
+        if (activity.isFinishing || activity.isDestroyed) {
+            giveUp()
+            return
+        }
+        var picked = -1
+        val shownAt = android.os.SystemClock.uptimeMillis()
+        val dialog = try {
+            MaterialAlertDialogBuilder(activity)
+                .setTitle(R.string.select_user_title)
+                .setItems(names) { _: DialogInterface?, which: Int -> picked = which }
+                .setNegativeButton(android.R.string.cancel, null)
+                // The press that asked for the list (+ on a controller) reads as a confirm key
+                // to a list: it must not pick the first user. Nor may a key still held.
+                .setOnKeyListener { _: DialogInterface?, keyCode: Int, _: android.view.KeyEvent? ->
+                    keyCode == android.view.KeyEvent.KEYCODE_BUTTON_START ||
+                        keyCode == android.view.KeyEvent.KEYCODE_BUTTON_SELECT ||
+                        android.os.SystemClock.uptimeMillis() - shownAt < 500
+                }
+                .setOnDismissListener {
+                    Log.info("[UserSelect] request $request: the list closed, picked $picked")
+                    userSelected(request, picked)
+                }
+                .show()
+        } catch (e: Exception) {
+            Log.error("[UserSelect] request $request: the list could not be shown: ${e.message}")
+            giveUp()
+            return
+        }
+        val late = synchronized(selectUserLock) {
+            if (selectUserGivenUp >= request) {
+                true
+            } else {
+                selectUserShown = request
+                selectUserLock.notifyAll()
+                false
+            }
+        }
+        if (late) {
+            // Given up while it came up: its answer would find nothing waiting.
+            dialog.dismiss()
+        } else {
+            Log.info("[UserSelect] request $request: the list is up")
         }
     }
 
-    private fun finishSelectUser(result: Int) {
-        synchronized(selectUserLock) {
-            selectUserResult = result
-            selectUserDone = true
-            selectUserLock.notifyAll()
-        }
-    }
+    /**
+     * The answer to a list of users.
+     *
+     * @param index The picked user's index in the list, -1 when the list was closed.
+     */
+    external fun userSelected(request: Int, index: Int)
 
     /**
      * Sets the cabinet mode for launching the cabinet applet.

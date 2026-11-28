@@ -1669,6 +1669,12 @@ jstring Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesProblem(JNIEnv* env, 
     return Common::Android::ToJString(env, g_firmware_files_problem);
 }
 
+// The person's answer to a game's user selection (the list NativeLibrary.selectUser showed).
+void Java_org_yuzu_yuzu_1emu_NativeLibrary_userSelected(JNIEnv* env, jclass clazz, jint request,
+                                                        jint index) {
+    Common::Android::ProfileSelect::UserSelected(request, index);
+}
+
 // The console the firmware files in a folder are for, before they are installed: the first file
 // that opens tells by its title id (a Switch 2's system titles are 04..., a Switch's 01...).
 // → 2 = Switch 2, 1 = Switch, 0 = the installed keys open none of the first files

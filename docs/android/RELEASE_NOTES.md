@@ -34,7 +34,7 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
 - **A second player:** a controller in no mapping becomes the next free player at a button
   press during a game. When a game asks which user a player is (Minecraft, at + on the second
   controller), a list asks who is playing and the game gets the pick (create a second user in
-  Profile Manager first).
+  Profile Manager first). The game runs on while the list is up.
 - **Cache storage size:** a game that asks how large the cache storage it created is gets
   that size, not zero (Minecraft asks at start).
 - **Vibration goes to the controller** when it has a motor; the phone vibrates in its place

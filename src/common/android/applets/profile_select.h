@@ -8,13 +8,19 @@
 namespace Common::Android::ProfileSelect {
 
 /// A game's user selection, asked of the person: a second local player picks their own user.
+/// The game is not held while the list is up: the answer comes back through UserSelected.
 class AndroidProfileSelect final : public Core::Frontend::ProfileSelectApplet {
 public:
+    AndroidProfileSelect();
     ~AndroidProfileSelect() override;
 
     void Close() const override;
     void SelectProfile(SelectProfileCallback callback,
                        const Core::Frontend::ProfileSelectParameters& parameters) const override;
 };
+
+/// The person's answer to the list of a request (NativeLibrary.userSelected): the index picked,
+/// or -1 when the list was closed.
+void UserSelected(int request, int index);
 
 } // namespace Common::Android::ProfileSelect

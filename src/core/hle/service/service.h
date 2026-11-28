@@ -46,6 +46,10 @@ static_assert(ServerSessionCountMax == 0x40,
               "ServerSessionCountMax isn't 0x40 somehow, this assert is a reminder that this will "
               "break lots of things");
 
+/// Logs the next service commands at Info, those of the interfaces called every frame left out:
+/// what a game does after something worth following (a second player's user was picked).
+void TraceNextRequests(u32 count);
+
 /**
  * This is an non-templated base of ServiceFramework to reduce code bloat and compilation times, it
  * is not meant to be used directly.

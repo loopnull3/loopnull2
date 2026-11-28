@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,44 +16,85 @@
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/hle/service/service.h"
 
 namespace Common::Android::ProfileSelect {
 
 namespace {
 
-// What NativeLibrary.selectUser answers besides a user's index.
-constexpr jint Cancelled = -1;
-constexpr jint NoDialog = -2;
+using Callback = Core::Frontend::ProfileSelectApplet::SelectProfileCallback;
 
-jint AskPerson(const std::vector<std::string>& names) {
+// A selection whose list is up: the answer is the person's to give.
+struct Pending {
+    int request{};
+    Callback callback;
+    std::vector<Common::UUID> users;
+};
+
+std::mutex state_mutex;
+std::optional<Pending> pending;
+int last_request{};
+// The users this selection gave the game since it started: who is taken to be playing already
+// when nobody can be asked.
+std::vector<Common::UUID> given;
+
+// Shows the list. False when it did not come up (no activity, or the UI thread does not answer
+// in time): then no answer follows.
+bool ShowList(const std::vector<std::string>& names, int request) {
     // On a thread of its own: this is called from where no JNI environment can be taken.
-    return RunJNIOnFiber<jint>([&names](JNIEnv* env) -> jint {
+    return RunJNIOnFiber<bool>([&names, request](JNIEnv* env) -> bool {
         const jclass native_library = GetNativeLibraryClass();
         if (env == nullptr || native_library == nullptr) {
-            return NoDialog;
+            return false;
         }
         const jmethodID select_user =
-            env->GetStaticMethodID(native_library, "selectUser", "([Ljava/lang/String;)I");
+            env->GetStaticMethodID(native_library, "selectUser", "([Ljava/lang/String;I)Z");
         if (select_user == nullptr) {
             env->ExceptionClear();
-            return NoDialog;
+            return false;
         }
         const jobjectArray j_names = ToJStringArray(env, names);
-        const jint picked = env->CallStaticIntMethod(native_library, select_user, j_names);
+        const jboolean shown = env->CallStaticBooleanMethod(native_library, select_user, j_names,
+                                                           static_cast<jint>(request));
         env->DeleteLocalRef(j_names);
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
-            return NoDialog;
+            return false;
         }
-        return picked;
+        return shown != JNI_FALSE;
     });
+}
+
+void Give(const Callback& callback, const Common::UUID& user) {
+    {
+        std::scoped_lock lock{state_mutex};
+        if (std::ranges::find(given, user) == given.end()) {
+            given.push_back(user);
+        }
+    }
+    // What the game does with the user it was given goes to the log for a while.
+    Service::TraceNextRequests(300);
+    callback(user);
 }
 
 } // Anonymous namespace
 
-AndroidProfileSelect::~AndroidProfileSelect() = default;
+AndroidProfileSelect::AndroidProfileSelect() {
+    std::scoped_lock lock{state_mutex};
+    pending.reset();
+    given.clear();
+}
 
-void AndroidProfileSelect::Close() const {}
+AndroidProfileSelect::~AndroidProfileSelect() {
+    std::scoped_lock lock{state_mutex};
+    pending.reset();
+}
+
+void AndroidProfileSelect::Close() const {
+    // The game took its request back: an answer that still comes finds nothing waiting.
+    std::scoped_lock lock{state_mutex};
+    pending.reset();
+}
 
 void AndroidProfileSelect::SelectProfile(
     SelectProfileCallback callback,
@@ -104,7 +147,7 @@ void AndroidProfileSelect::SelectProfile(
     }
     if (users.empty()) {
         // Nobody is left to pick: the person is told, and the game hears a cancel.
-        AskPerson(names);
+        ShowList(names, 0);
         describe("nobody is left to pick, a second local player needs a second user (Profile "
                  "Manager): cancelled");
         callback(std::nullopt);
@@ -112,28 +155,71 @@ void AndroidProfileSelect::SelectProfile(
     }
     if (users.size() == 1) {
         describe("the only user that can be picked");
-        callback(users.front());
+        Give(callback, users.front());
         return;
     }
 
     // Several users: the person says who plays, as on the console. A game adding a local player
     // asks here, and it must not be given the user who already plays (Minecraft was, eight times
-    // over).
-    const jint picked = AskPerson(names);
-    if (picked >= 0 && static_cast<size_t>(picked) < users.size()) {
-        describe(fmt::format("the person picked user {} of the list", picked + 1));
-        callback(users[static_cast<size_t>(picked)]);
+    // over). The game is not held meanwhile: its request returns and the answer completes it.
+    int request{};
+    {
+        std::scoped_lock lock{state_mutex};
+        request = ++last_request;
+        pending = Pending{request, callback, users};
+    }
+    describe(fmt::format("the person is asked (request {})", request));
+    if (ShowList(names, request)) {
         return;
     }
-    if (picked == Cancelled) {
-        describe("the person closed the list: cancelled");
-        callback(std::nullopt);
+
+    // No list came up, so nobody can be asked. The user the game was started with, as before,
+    // unless this selection gave it already: then the first user not given yet. (A game that
+    // names the playing users has them out of the list, and gets another at once.)
+    Common::UUID pick = users.front();
+    {
+        std::scoped_lock lock{state_mutex};
+        if (!pending || pending->request != request) {
+            return;
+        }
+        pending.reset();
+        const auto is_given = [](const Common::UUID& user) {
+            return std::ranges::find(given, user) != given.end();
+        };
+        const auto fresh =
+            std::ranges::find_if(users, [&](const Common::UUID& user) { return !is_given(user); });
+        if (std::ranges::find(users, current) != users.end() && !is_given(current)) {
+            pick = current;
+        } else if (fresh != users.end()) {
+            pick = *fresh;
+        }
+    }
+    const auto index = std::ranges::find(users, pick) - users.begin();
+    describe(fmt::format("no list could be shown: user {} of the list", index + 1));
+    Give(callback, pick);
+}
+
+void UserSelected(int request, int index) {
+    std::optional<Pending> answered;
+    {
+        std::scoped_lock lock{state_mutex};
+        if (!pending || pending->request != request) {
+            LOG_INFO(Service_ACC, "User selection: an answer to request {} that nothing waits for",
+                     request);
+            return;
+        }
+        answered = std::move(pending);
+        pending.reset();
+    }
+    if (index >= 0 && static_cast<size_t>(index) < answered->users.size()) {
+        LOG_INFO(Service_ACC, "User selection: the person picked user {} of the list (request {})",
+                 index + 1, request);
+        Give(answered->callback, answered->users[static_cast<size_t>(index)]);
         return;
     }
-    // No dialog could be shown: the current user if it can be picked, else the first that can.
-    const auto it = std::ranges::find(users, current);
-    describe(it != users.end() ? "no dialog, the current user" : "no dialog, the first user");
-    callback(it != users.end() ? *it : users.front());
+    LOG_INFO(Service_ACC, "User selection: the person closed the list (request {}): cancelled",
+             request);
+    answered->callback(std::nullopt);
 }
 
 } // namespace Common::Android::ProfileSelect

@@ -6,6 +6,8 @@
 
 #include "common/scope_exit.h"
 #include <vector>
+#include <atomic>
+#include <array>
 #include <tuple>
 #include <mutex>
 #include <map>
@@ -184,6 +186,33 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
     }
 }
 
+namespace {
+
+std::atomic<s32> trace_budget{};
+
+// The interfaces a game calls every frame or for every file: they would use the budget up.
+bool IsCalledAllTheTime(std::string_view name) {
+    static constexpr std::array<std::string_view, 12> Prefixes{
+        "nvdrv",  "hid",   "IHOSBinderDriver", "IAppletResource", "IAudio",       "aud",
+        "IFile",  "IStorage", "IDirectory",    "bsd",             "ISystemClock", "ISteadyClock",
+    };
+    return std::ranges::any_of(Prefixes,
+                               [name](std::string_view prefix) { return name.starts_with(prefix); });
+}
+
+bool TakeTraceBudget(std::string_view name) {
+    if (trace_budget.load(std::memory_order_relaxed) <= 0 || IsCalledAllTheTime(name)) {
+        return false;
+    }
+    return trace_budget.fetch_sub(1, std::memory_order_relaxed) > 0;
+}
+
+} // Anonymous namespace
+
+void TraceNextRequests(u32 count) {
+    trace_budget.store(static_cast<s32>(count), std::memory_order_relaxed);
+}
+
 void ServiceFrameworkBase::InvokeRequest(HLERequestContext& ctx) {
     auto it = handlers.find(ctx.GetCommand());
     FunctionInfoBase const* info = it == handlers.end() ? nullptr : &it->second;
@@ -192,7 +221,9 @@ void ServiceFrameworkBase::InvokeRequest(HLERequestContext& ctx) {
 
     LOG_TRACE(Service, "{}", MakeFunctionString(info->name, GetServiceName(), ctx.CommandBuffer()));
     // EDEN_NX2_IPC_TRACE=1 logs every dispatched command and the result word it returned.
-    static const bool ipc_trace = std::getenv("EDEN_NX2_IPC_TRACE") != nullptr;
+    // TraceNextRequests does the same for a number of commands.
+    static const bool ipc_trace_always = std::getenv("EDEN_NX2_IPC_TRACE") != nullptr;
+    const bool ipc_trace = ipc_trace_always || TakeTraceBudget(service_name);
     if (ipc_trace) {
         LOG_INFO(Service, "ipc {}::{} ({})", service_name, ctx.GetCommand(), info->name);
     }

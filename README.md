@@ -255,7 +255,13 @@ A game that adds a local player asks which user that player is (Minecraft does, 
 second controller presses +), and does not take a user who is already playing. With several
 users a list asks who is playing, as the console does, and the person picks; the users the game
 excludes are left out of it. With one user that can be picked there is no list. So a second
-local player needs a second user: create one in Profile Manager before the game.
+local player needs a second user: create one in Profile Manager before the game. The game runs
+on while the list is up. The + that asked for it does not pick from it (a controller's + and -
+read as a confirm key to a list), nor does any key in its first half second. If no list comes
+up within two seconds nobody can be asked, and the game gets the user it was started with or,
+once the selection gave that one, the first not given yet. The log follows each step
+(`[UserSelect]` and `User selection:` lines) and the service commands the game sends after it
+was given a user (`ipc ...` lines, 300 of them).
 
 Minecraft itself, as players of the console describe it: the world's "Multiplayer Game" switch
 is the online play, which asks for a Nintendo Switch Online membership (an emulator has none),
