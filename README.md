@@ -254,23 +254,34 @@ mapping names, whichever other controllers are connected.
 A game that adds a local player asks which user that player is (Minecraft does, when the
 second controller presses +), and does not take a user who is already playing. With several
 users a list asks who is playing, as the console does, and the person picks; the users the game
-excludes are left out of it. With one user that can be picked there is no list. So a second
-local player needs a second user: create one in Profile Manager before the game. The game runs
-on while the list is up. The + that asked for it does not pick from it (a controller's + and -
+excludes are left out of it. Closing the list is a cancel for the game, as on the console (it
+used to be given the user it was started with in its place, and Minecraft signed that user in
+for the second controller). With one user that can be picked there is no list. So a second
+local player needs a second user: create one in Profile Manager before the game. Each user has
+an account id of its own (`GetAccountId` used to answer the first user's for every user). The
+game runs on while the list is up. The + that asked for it does not pick from it (a controller's + and -
 read as a confirm key to a list), nor does any key in its first half second. If no list comes
 up within two seconds nobody can be asked, and the game gets the user it was started with or,
 once the selection gave that one, the first not given yet. The log follows each step
-(`[UserSelect]` and `User selection:` lines) and the service commands the game sends after it
-was given a user (`ipc ...` lines, 300 of them). With a Switch firmware installed the selection
+(`[UserSelect]` and `User selection:` lines), the controller keys before a request and for 20
+seconds after its answer (`[UserSelect] key ...`: which controller asked, and whether its key
+was let go) and the service commands the game sends after it was given a user (`ipc ...`
+lines, 300 of them). With a Switch firmware installed the selection
 would be the console's own program, as upstream has it; on the S26 that program ended in a
 fatal error at its start and the game waited for it for good, so on Android the list is the
 default (`player_select_applet_mode`).
 
-Minecraft itself, as players of the console describe it: the world's "Multiplayer Game" switch
-is the online play, which asks for a Nintendo Switch Online membership (an emulator has none),
-and two players on one screen do not need it. Enter the world, press + on the second
-controller and pick the second user. They also report the split screen in TV mode, so if the
-second player does not join in handheld mode, set docked mode. None of this has run here.
+Minecraft itself. On the S26 the second player picked a user, the game signed that user in and
+then asked for a user again, nine times in a minute: the second player did not stay. Players of
+the console describe the same ("after picking a second user from the menu, the game freezes for
+a moment, and immediately removes the second player") and quote the game's own message for it:
+without a Nintendo Switch Online membership, two players on one screen need the world's
+"Multiplayer Game" switch off. An emulator has no membership. The switch is in the world's
+settings, reached from the list of worlds (the pencil next to the world, then Multiplayer);
+inside a running world it is greyed out. So: switch it off there, enter the world, press + on
+the second controller and pick the second user. Sources disagree on whether the split screen
+needs TV mode, so if the second player still does not stay, set docked mode. Not tried on the
+S26 yet.
 
 The log says which controllers are connected, which player each one drives and how, each
 player's connection and controller type, the controller types and players the game takes, and

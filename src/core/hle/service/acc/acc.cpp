@@ -685,10 +685,11 @@ protected:
 class IManagerForApplication final : public ServiceFramework<IManagerForApplication> {
 public:
     explicit IManagerForApplication(Core::System& system_,
-                                    const std::shared_ptr<ProfileManager>& profile_manager_)
+                                    const std::shared_ptr<ProfileManager>& profile_manager_,
+                                    Common::UUID user_id_)
         : ServiceFramework{system_, "IManagerForApplication"},
           ensure_token_id{std::make_shared<EnsureTokenIdCacheAsyncInterface>(system)},
-          profile_manager{profile_manager_} {
+          profile_manager{profile_manager_}, user_id{user_id_} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IManagerForApplication::CheckAvailability, "CheckAvailability"},
@@ -714,12 +715,18 @@ private:
         rb.Push(ResultSuccess);
     }
 
+    /// The user this manager was opened for. A game that opens a second user (a second local
+    /// player) must not be told the first one's account for both.
+    Common::UUID AccountUser() const {
+        return user_id.IsValid() ? user_id : profile_manager->GetLastOpenedUser();
+    }
+
     void GetAccountId(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
 
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(profile_manager->GetLastOpenedUser().Hash());
+        rb.PushRaw<u64>(AccountUser().Hash());
     }
 
     void EnsureIdTokenCacheAsync(HLERequestContext& ctx) {
@@ -762,7 +769,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(profile_manager->GetLastOpenedUser().Hash());
+        rb.PushRaw<u64>(AccountUser().Hash());
     }
 
     void StoreOpenContext(HLERequestContext& ctx) {
@@ -776,6 +783,7 @@ private:
 
     std::shared_ptr<EnsureTokenIdCacheAsyncInterface> ensure_token_id{};
     std::shared_ptr<ProfileManager> profile_manager;
+    Common::UUID user_id;
 };
 
 // 6.0.0+
@@ -988,10 +996,13 @@ Result Module::Interface::InitializeApplicationInfoBase() {
 }
 
 void Module::Interface::GetBaasAccountManagerForApplication(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
+    IPC::RequestParser rp{ctx};
+    const auto user_id = rp.PopRaw<Common::UUID>();
+    LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<IManagerForApplication>(ctx, system, profile_manager);
+    rb.PushIpcInterface<IManagerForApplication>(ctx, system, profile_manager, user_id);
 }
 
 void Module::Interface::IsUserAccountSwitchLocked(HLERequestContext& ctx) {

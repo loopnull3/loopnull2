@@ -180,7 +180,10 @@ Result ILibraryAppletAccessor::PopOutData(Out<SharedPointer<IStorage>> out_stora
         else if (is_front_app) caller_applet->lifecycle_manager.RequestFocusStateChangedNotification(system.Kernel());
     }
 
-    if (m_applet->applet_id == AppletId::ProfileSelect && *out_storage) {
+    // Only the console's own applet has its skip turned into the current user. A list of ours
+    // that the person closes is a cancel, as on the console: Minecraft, given the current user
+    // then, took the first player's user for the second player's.
+    if (m_applet->applet_id == AppletId::ProfileSelect && !m_applet->frontend && *out_storage) {
         auto impl = (*out_storage)->GetImpl();
 
         if (impl->GetSize() == sizeof(Frontend::UiReturnArg)) {

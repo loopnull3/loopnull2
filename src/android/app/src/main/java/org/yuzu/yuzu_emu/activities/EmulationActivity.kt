@@ -476,6 +476,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         if (isControllerInput && event.action == KeyEvent.ACTION_DOWN) {
             notifyControllerInput()
         }
+        if (isControllerInput) {
+            NativeLibrary.noteControllerKey(event, false)
+        }
 
         return InputHandler.dispatchKeyEvent(event)
     }

@@ -510,6 +510,57 @@ object NativeLibrary {
         WebBrowser.openExternal(url)
     }
 
+    /** A controller key as it went by: to the game, or to the list of users. */
+    private class NotedKey(
+        val at: Long,
+        val keyCode: Int,
+        val down: Boolean,
+        val cancelled: Boolean,
+        val port: Int,
+        val toList: Boolean
+    ) {
+        fun text(): String =
+            android.view.KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_") +
+                (if (down) " down" else " up") + (if (cancelled) " (cancelled)" else "") +
+                ", controller port $port" + (if (toList) ", to the list" else "")
+    }
+
+    private val notedKeys = ArrayDeque<NotedKey>()
+
+    /** Until when (uptime) each noted key gets a line in the log. */
+    @Volatile
+    private var keysLoggedUntil = 0L
+
+    /**
+     * Notes a controller key on its way to the game, or to the list of users. The keys before a
+     * game asks for a user and those after it has one say which controller asked, and whether
+     * what it pressed was let go: for the log of a second player that does not stay.
+     */
+    fun noteControllerKey(event: android.view.KeyEvent, toList: Boolean) {
+        val down = event.action == android.view.KeyEvent.ACTION_DOWN
+        if (event.repeatCount != 0 || (!down && event.action != android.view.KeyEvent.ACTION_UP)) {
+            return
+        }
+        val number = event.device?.controllerNumber ?: 0
+        val key = NotedKey(
+            android.os.SystemClock.uptimeMillis(),
+            event.keyCode,
+            down,
+            event.isCanceled,
+            org.yuzu.yuzu_emu.utils.InputHandler.androidControllers[number]?.getPort() ?: -1,
+            toList
+        )
+        synchronized(notedKeys) {
+            notedKeys.addLast(key)
+            while (notedKeys.size > 8) {
+                notedKeys.removeFirst()
+            }
+        }
+        if (key.at < keysLoggedUntil) {
+            Log.info("[UserSelect] key ${key.text()}")
+        }
+    }
+
     private val selectUserLock = Object()
 
     /** The newest request whose list came up, and the newest given up before its list did. */
@@ -544,6 +595,14 @@ object NativeLibrary {
             return false
         }
         Log.info("[UserSelect] request $request: a list of ${names.size} users is asked for")
+        val asked = android.os.SystemClock.uptimeMillis()
+        val before = synchronized(notedKeys) { notedKeys.toList() }
+            .joinToString("; ") { "${it.text()} ${asked - it.at} ms before" }
+        Log.info(
+            "[UserSelect] request $request: controller keys before it: " +
+                before.ifEmpty { "none" }
+        )
+        keysLoggedUntil = asked + 60000
         activity.runOnUiThread { showUserList(activity, names, request) }
         // The list comes up on the UI thread. If that thread does not get to it, nobody can be
         // asked, and the caller must not wait for an answer.
@@ -591,6 +650,7 @@ object NativeLibrary {
                 }
                 .setOnDismissListener {
                     Log.info("[UserSelect] request $request: the list closed, picked $picked")
+                    keysLoggedUntil = android.os.SystemClock.uptimeMillis() + 20000
                     userSelected(request, picked)
                 }
                 .show()
@@ -630,6 +690,11 @@ object NativeLibrary {
         event: android.view.KeyEvent?,
         shownAt: Long
     ): Boolean {
+        if (event != null &&
+            org.yuzu.yuzu_emu.utils.InputHandler.isPhysicalGameController(event.device)
+        ) {
+            noteControllerKey(event, true)
+        }
         if (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_START ||
             keyCode == android.view.KeyEvent.KEYCODE_BUTTON_SELECT ||
             android.os.SystemClock.uptimeMillis() - shownAt < 500
