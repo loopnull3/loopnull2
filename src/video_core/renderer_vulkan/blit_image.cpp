@@ -1173,10 +1173,13 @@ void BlitImageHelper::CopyMSAAImpl(VkRenderPass renderpass, VkPipeline pipeline,
                 src_stencil_handle = *src_stencil_view;
             }
             scheduler.RequestOutsideRenderPassOperationContext();
+            // Under test (debug knob 2), as at the end of the game's passes (vk_scheduler.cpp).
+            const bool flush_for_every_reader = Settings::GetDebugKnobAt(1);
             scheduler.Record([this, pipeline, layout, sampler, renderpass,
                               framebuffer_handle = *framebuffer, src_view_handle = *src_view,
                               src_stencil_handle, src = src_image, dst = dst_image, render_area,
-                              aspect_info, push_constants](vk::CommandBuffer cmdbuf) {
+                              aspect_info, push_constants,
+                              flush_for_every_reader](vk::CommandBuffer cmdbuf) {
                 const VkImageSubresourceRange barrier_range{
                     .aspectMask = aspect_info.barrier_aspect,
                     .baseMipLevel = 0,
@@ -1259,8 +1262,20 @@ void BlitImageHelper::CopyMSAAImpl(VkRenderPass renderpass, VkPipeline pipeline,
                     .image = dst,
                     .subresourceRange = barrier_range,
                 };
-                cmdbuf.PipelineBarrier(aspect_info.post_src_stages, aspect_info.post_dst_stages, 0,
-                                       post_barrier);
+                if (flush_for_every_reader) {
+                    const VkMemoryBarrier every_reader{
+                        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = aspect_info.post_src_access,
+                        .dstAccessMask = aspect_info.post_dst_access,
+                    };
+                    cmdbuf.PipelineBarrier(aspect_info.post_src_stages,
+                                           aspect_info.post_dst_stages, 0, every_reader, {},
+                                           post_barrier);
+                } else {
+                    cmdbuf.PipelineBarrier(aspect_info.post_src_stages,
+                                           aspect_info.post_dst_stages, 0, post_barrier);
+                }
             });
             msaa_copy_resources.push_back(MSAACopyResources{
                 .tick = scheduler.CurrentTick(),
