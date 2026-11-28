@@ -49,6 +49,8 @@ void SetupDirtyRenderTargets(Maxwell3D::DirtyState::Tables& tables) {
 
     tables[0][OFF(rt_control)] = RenderTargets;
     tables[1][OFF(rt_control)] = RenderTargetControl;
+    // The layer a draw into an array goes to: the targets' views begin there.
+    tables[0][OFF(rt_layer)] = RenderTargets;
 
     static constexpr std::array zeta_flags{ZetaBuffer, RenderTargets};
     for (std::size_t i = 0; i < std::size(zeta_flags); ++i) {
@@ -57,7 +59,6 @@ void SetupDirtyRenderTargets(Maxwell3D::DirtyState::Tables& tables) {
         table[OFF(zeta_enable)] = flag;
         table[OFF(zeta_size.width)] = flag;
         table[OFF(zeta_size.height)] = flag;
-        table[OFF(zeta_layer_offset)] = flag;
         FillBlock(table, OFF(zeta), NUM(zeta), flag);
     }
 }

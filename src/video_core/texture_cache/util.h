@@ -169,16 +169,12 @@ void SwizzleImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const Ima
                                                           bool strict_size, bool broken_views,
                                                           bool native_bgr);
 
-/// The layers a render target covers in its image. Its registers count `layers` from the image's
-/// layer at `base` and name the one the target starts at (`first_layer`, the base layer register):
-/// Mesa's nvc0 driver writes first_layer + depth and first_layer, with the address of the array.
+/// The layers a draw's render target covers in its image: `layers` from the layer at `base`, or,
+/// when the layer register names one of them past the first (`selected_layer`), that one alone.
+/// A draw into an array goes to the register's layer unless a program selects it (Maxwell's
+/// RtLayer at 0x15CC; Mesa's nvc0 driver has it as LAYER, with IDX and USE_GP).
 [[nodiscard]] SubresourceRange RenderTargetRange(ImageType type, SubresourceBase base, s32 layers,
-                                                 u32 first_layer);
-
-/// The layers a render target's image needs from the layer at the target's address: `layers`
-/// (the register) when it reaches past `first_layer`, as Mesa writes it; when it does not, it
-/// can only count from `first_layer`.
-[[nodiscard]] s32 RenderTargetLayerCount(s32 layers, u32 first_layer);
+                                                 u32 selected_layer);
 
 /// Whether a new image and an overlap at the same address are one single-level 2D surface seen
 /// with and without multisampling (a multisampled target and the wider texture its samples are

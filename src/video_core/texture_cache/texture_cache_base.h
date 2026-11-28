@@ -513,9 +513,9 @@ private:
     [[nodiscard]] ImageViewId FindDepthBuffer();
 
     /// Find or create a view for a render target with the given image parameters
-    /// `first_layer` is the target's base layer register (RenderTargetRange).
+    /// `selected_layer` is the layer register's layer for a draw (RenderTargetRange).
     [[nodiscard]] ImageViewId FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr,
-                                                   u32 first_layer = 0);
+                                                   u32 selected_layer = 0);
 
     /// Iterates over all the images in a region calling func
     template <typename Func>
@@ -615,6 +615,8 @@ private:
     std::deque<TextureCacheGPUMap> gpu_page_table_storage;
 
     RenderTargets render_targets;
+    /// The layer register's layer the views in render_targets were made for (0 for a clear).
+    u32 render_target_layer = 0;
     u64 render_targets_serial = 0;
     u32 rt_active_mask = 0;
     std::array<ImageId, 8> rt_image_id{};

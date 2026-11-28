@@ -1208,6 +1208,16 @@ void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
     } clearing_scope{clearing_render_targets};
     clearing_render_targets = is_clear;
     auto& flags = maxwell3d->dirty.flags;
+    // A draw into an array goes to the layer the layer register names, unless the register leaves
+    // the choice to a program. A clear names its own layer, so its targets keep all of theirs.
+    const auto& layer_register = maxwell3d->regs.rt_layer;
+    const u32 selected_layer =
+        !is_clear && layer_register.control.Value() == 0 ? layer_register.layer.Value() : 0;
+    if (selected_layer != render_target_layer) {
+        render_target_layer = selected_layer;
+        flags[Dirty::RenderTargets] = true;
+        flags[Dirty::RenderTargetControl] = true;
+    }
     if (!flags[Dirty::RenderTargets]) {
         for (size_t index = 0; index < NUM_RT; ++index) {
             ImageViewId& color_buffer_id = render_targets.color_buffer_ids[index];
@@ -3775,11 +3785,8 @@ ImageViewId TextureCache<P>::FindColorBuffer(size_t index) {
     if (rt.format == Tegra::RenderTargetFormat::NONE) {
         return ImageViewId{};
     }
-    ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
-    if (info.type == ImageType::e2D) {
-        info.resources.layers = RenderTargetLayerCount(info.resources.layers, rt.base_layer);
-    }
-    return FindRenderTargetView(info, gpu_addr, rt.base_layer);
+    const ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
+    return FindRenderTargetView(info, gpu_addr, render_target_layer);
 }
 
 template <class P>
@@ -3792,17 +3799,13 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
     if (gpu_addr == 0) {
         return ImageViewId{};
     }
-    ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
-    if (info.type == ImageType::e2D) {
-        info.resources.layers =
-            RenderTargetLayerCount(info.resources.layers, regs.zeta_layer_offset);
-    }
-    return FindRenderTargetView(info, gpu_addr, regs.zeta_layer_offset);
+    const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    return FindRenderTargetView(info, gpu_addr, render_target_layer);
 }
 
 template <class P>
 ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr,
-                                                  u32 first_layer) {
+                                                  u32 selected_layer) {
     static constexpr u32 MaxRenderTargetSize = 32768;
     static constexpr s32 MaxRenderTargetLayers = 2048;
     if (info.size.width == 0 || info.size.height == 0 || info.size.width > MaxRenderTargetSize ||
@@ -3852,22 +3855,28 @@ ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAdd
                      image.gpu_addr, gpu_addr, info.size.width, info.size.height, base.level, base.layer);
         }
     }
-    // A cube's face is drawn with the cube's address and the face as the base layer (Minecraft's
-    // 1.26.62 update fills its title background so): all six went into the first face while the
-    // register was not read.
-    const SubresourceRange range = RenderTargetRange(image.info.type, base, layers, first_layer);
+    // A cube's face is drawn with the whole cube bound and the face in the layer register
+    // (Minecraft's 1.26.62 update fills its title background so, six times): all six went into
+    // the first face while the register was not read.
+    const SubresourceRange range = RenderTargetRange(image.info.type, base, layers, selected_layer);
     if (Settings::GetDebugKnobAt(0) &&
-        (first_layer != 0 || (image.info.type == ImageType::e2D &&
-                              image.info.resources.layers >= 2 &&
-                              image.info.resources.layers <= 16))) {
-        // Debug knob 1: targets that name a first layer, and targets in a cube or a small array.
+        (selected_layer != 0 || (image.info.type == ImageType::e2D &&
+                                 image.info.resources.layers >= 2 &&
+                                 image.info.resources.layers <= 16))) {
+        // Debug knob 1: targets in a cube or a small array, and what selects their layer.
         static std::atomic<u32> logged{};
         if (logged.fetch_add(1, std::memory_order_relaxed) < 64) {
+            const auto& regs = maxwell3d->regs;
             LOG_INFO(HW_GPU,
-                     "Render target at {:#x}: {}x{}, {} layers, the first one {} (format {}, layer "
-                     "stride {:#x}): layers {} to {} of the {}x{} image of {} layers at {:#x}",
-                     gpu_addr, info.size.width, info.size.height, layers, first_layer,
-                     static_cast<u32>(info.format), info.layer_stride, range.base.layer,
+                     "Render target at {:#x}: {}x{}, {} layers (format {}, layer stride {:#x}); "
+                     "layer register {} ({}), base layer {} and {} (not read), for a {}: layers {} "
+                     "to {} of the {}x{} image of {} layers at {:#x}",
+                     gpu_addr, info.size.width, info.size.height, layers,
+                     static_cast<u32>(info.format), info.layer_stride, regs.rt_layer.layer.Value(),
+                     regs.rt_layer.control.Value() == 0 ? "the register selects"
+                                                        : "a program selects",
+                     regs.rt[0].base_layer, regs.zeta_layer_offset,
+                     clearing_render_targets ? "clear" : "draw", range.base.layer,
                      range.base.layer + range.extent.layers - 1, image.info.size.width,
                      image.info.size.height, image.info.resources.layers, image.gpu_addr);
         }
