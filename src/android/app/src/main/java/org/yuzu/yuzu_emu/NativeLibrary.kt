@@ -585,12 +585,9 @@ object NativeLibrary {
                 .setTitle(R.string.select_user_title)
                 .setItems(names) { _: DialogInterface?, which: Int -> picked = which }
                 .setNegativeButton(android.R.string.cancel, null)
-                // The press that asked for the list (+ on a controller) reads as a confirm key
-                // to a list: it must not pick the first user. Nor may a key still held.
-                .setOnKeyListener { _: DialogInterface?, keyCode: Int, _: android.view.KeyEvent? ->
-                    keyCode == android.view.KeyEvent.KEYCODE_BUTTON_START ||
-                        keyCode == android.view.KeyEvent.KEYCODE_BUTTON_SELECT ||
-                        android.os.SystemClock.uptimeMillis() - shownAt < 500
+                .setOnKeyListener { list: DialogInterface?, keyCode: Int,
+                                    event: android.view.KeyEvent? ->
+                    onUserListKey(list, keyCode, event, shownAt)
                 }
                 .setOnDismissListener {
                     Log.info("[UserSelect] request $request: the list closed, picked $picked")
@@ -617,6 +614,56 @@ object NativeLibrary {
         } else {
             Log.info("[UserSelect] request $request: the list is up")
         }
+    }
+
+    /**
+     * A key on the list of users: true when the list is not to see it.
+     *
+     * The press that asked for the list (+ on a controller) reads as a confirm key to a list,
+     * and must not pick its first user; nor may a key still held when it comes up. A Nintendo
+     * controller's A is its right button, which Android reads as B (back), and its B the lower
+     * one, read as A (confirm): here they do what their labels say.
+     */
+    private fun onUserListKey(
+        list: DialogInterface?,
+        keyCode: Int,
+        event: android.view.KeyEvent?,
+        shownAt: Long
+    ): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_START ||
+            keyCode == android.view.KeyEvent.KEYCODE_BUTTON_SELECT ||
+            android.os.SystemClock.uptimeMillis() - shownAt < 500
+        ) {
+            return true
+        }
+        val nintendo = event?.device?.vendorId == 0x057e
+        if (!nintendo || (
+                keyCode != android.view.KeyEvent.KEYCODE_BUTTON_A &&
+                    keyCode != android.view.KeyEvent.KEYCODE_BUTTON_B
+                )
+        ) {
+            return false
+        }
+        if (event?.action != android.view.KeyEvent.ACTION_UP) {
+            return true
+        }
+        if (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_A) {
+            list?.cancel()
+            return true
+        }
+        val entries = (list as? androidx.appcompat.app.AlertDialog)?.listView ?: return true
+        val position = entries.selectedItemPosition
+        if (position < 0) {
+            entries.requestFocusFromTouch()
+            entries.setSelection(0)
+        } else {
+            entries.performItemClick(
+                entries.selectedView,
+                position,
+                entries.getItemIdAtPosition(position)
+            )
+        }
+        return true
     }
 
     /**

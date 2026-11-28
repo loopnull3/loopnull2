@@ -23,4 +23,8 @@ public:
 /// or -1 when the list was closed.
 void UserSelected(int request, int index);
 
+/// Drops the selection that waits for an answer, when what it would complete is going away (the
+/// emulation stops): an answer that still comes finds nothing.
+void Forget();
+
 } // namespace Common::Android::ProfileSelect

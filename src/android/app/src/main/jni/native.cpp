@@ -487,6 +487,9 @@ void EmulationSession::ShutdownEmulation() {
     m_is_running = false;
     m_native_home_menu_running = false;
 
+    // A list of users still up answers nothing any more: what it would complete goes away.
+    Common::Android::ProfileSelect::Forget();
+
     // Unload user input.
     m_system.HIDCore().UnloadInputDevices();
 

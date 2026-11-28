@@ -199,6 +199,11 @@ void AndroidProfileSelect::SelectProfile(
     Give(callback, pick);
 }
 
+void Forget() {
+    std::scoped_lock lock{state_mutex};
+    pending.reset();
+}
+
 void UserSelected(int request, int index) {
     std::optional<Pending> answered;
     {
