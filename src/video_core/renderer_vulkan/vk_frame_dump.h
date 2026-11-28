@@ -106,6 +106,11 @@ public:
         const Sampler* sampler;
     };
 
+    /// The stage of an entry that is not sampled itself: the image over the same memory that a
+    /// sampled one (of that slot) is brought up to date from, such as the target a texture is a
+    /// view of. Recorded as "kind":"alias_source".
+    static constexpr u32 AliasSourceStage = 9;
+
     /// A uniform or storage buffer binding. Its bytes come from guest memory, or from the host
     /// buffer when the GPU wrote the range and guest memory may be stale.
     struct BoundBuffer {

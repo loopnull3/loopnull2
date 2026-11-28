@@ -1116,10 +1116,31 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
         bool recorded = false;
         if (frame_dump.CapturingSampled()) {
+            // The images a large sampled one is brought up to date from (the target a texture
+            // is a view of), first: making their views can move the views.
+            const auto images = pipeline->SampledImages();
+            boost::container::small_vector<std::pair<size_t, VideoCommon::ImageViewId>, 4> sources;
+            for (size_t index = 0; index < images.size(); ++index) {
+                boost::container::small_vector<VideoCommon::ImageViewId, 2> views;
+                const std::string aliases =
+                    texture_cache.CaptureAliasSources(images[index].id, views);
+                if (!aliases.empty()) {
+                    frame_dump.NoteEvent("aliases", fmt::format(R"("tic":{},"images":[{}])",
+                                                               images[index].tic, aliases));
+                }
+                for (const VideoCommon::ImageViewId view : views) {
+                    sources.emplace_back(index, view);
+                }
+            }
             boost::container::small_vector<FrameDump::Sampled, 16> sampled;
-            for (const auto& image : pipeline->SampledImages()) {
+            for (const auto& image : images) {
                 sampled.push_back({image.stage, image.tic, &texture_cache.GetImageView(image.id),
                                    &texture_cache.GetSampler(image.sampler)});
+            }
+            for (const auto& [index, view] : sources) {
+                sampled.push_back({FrameDump::AliasSourceStage, images[index].tic,
+                                   &texture_cache.GetImageView(view),
+                                   &texture_cache.GetSampler(images[index].sampler)});
             }
             recorded = frame_dump.NoteSampled(sampled);
         }

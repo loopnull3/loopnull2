@@ -11,6 +11,8 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -418,6 +420,18 @@ public:
 
     /// Prepare an image to be used
     void PrepareImage(ImageId image_id, bool is_modification, bool invalidate);
+
+    /// For a frame capture: views of the one-sample images the GPU wrote over the same memory as
+    /// a sampled view's image, which that image is brought up to date from, and a description of
+    /// every image over that memory (JSON objects). Call before taking pointers to views: making
+    /// a view can move them.
+    std::string CaptureAliasSources(ImageViewId id,
+                                    boost::container::small_vector<ImageViewId, 2>& out);
+
+    /// Debug knob 1: what is done with a large 2D image, each kind of thing once per image. For
+    /// a picture that is wrong in a texture the game filled long before it is drawn.
+    void NoteLargeImage(const ImageBase& image, std::string_view what,
+                        std::string_view detail = {});
 
     Common::SpinRecursiveMutex mutex;
 

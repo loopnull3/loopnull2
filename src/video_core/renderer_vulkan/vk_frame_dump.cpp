@@ -435,9 +435,12 @@ std::optional<std::pair<GPUVAddr, u32>> SampledKey(const FrameDump::Sampled& tex
     if (!image) {
         return std::nullopt;
     }
-    return std::pair{image->gpu_addr, (static_cast<u32>(texture.view->format) << 16) |
-                                          (static_cast<u32>(texture.view->range.base.level) << 8) |
-                                          static_cast<u32>(texture.view->range.base.layer)};
+    // (An alias source is at its sampled image's address, in its format.)
+    return std::pair{image->gpu_addr,
+                     (texture.stage == FrameDump::AliasSourceStage ? 0x80000000U : 0U) |
+                         (static_cast<u32>(texture.view->format) << 16) |
+                         (static_cast<u32>(texture.view->range.base.level) << 8) |
+                         static_cast<u32>(texture.view->range.base.layer)};
 }
 } // Anonymous namespace
 
@@ -486,12 +489,15 @@ bool FrameDump::NoteSampled(std::span<const Sampled> textures) {
         }
         const u32 index = static_cast<u32>(pass_sampled.size());
         pass_sampled.push_back(*key);
+        const bool is_source = texture.stage == AliasSourceStage;
         recorded |= RecordSampled(
             texture, index,
-            fmt::format("{:04}_pass{:03}_tex{:02}_s{}_tic{}", sequence++, pass_index, index,
-                        texture.stage, texture.tic),
-            fmt::format(R"("kind":"sampled","pass":{},"draw":{},"stage":{},"tic":{},"index":{})",
-                        pass_index, draws - 1, texture.stage, texture.tic, index));
+            fmt::format("{:04}_pass{:03}_tex{:02}_{}_tic{}", sequence++, pass_index, index,
+                        is_source ? std::string{"from"} : fmt::format("s{}", texture.stage),
+                        texture.tic),
+            fmt::format(R"("kind":"{}","pass":{},"draw":{},"stage":{},"tic":{},"index":{})",
+                        is_source ? "alias_source" : "sampled", pass_index, draws - 1,
+                        texture.stage, texture.tic, index));
     }
     return recorded;
 }

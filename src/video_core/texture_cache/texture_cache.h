@@ -13,6 +13,7 @@
 #include <limits>
 #include <map>
 #include <vector>
+#include <unordered_set>
 #include <tuple>
 #include <optional>
 #include <bit>
@@ -205,6 +206,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         if (must_download) {
             auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
             auto copies = FullDownloadCopies(image.info);
+            NoteLargeImage(image, "downloaded to guest memory");
             image.DownloadMemory(map, copies);
             downloads.push_back(PendingDownload{
                 .map = map,
@@ -1459,6 +1461,7 @@ void TextureCache<P>::DownloadMemory(DAddr cpu_addr, size_t size) {
         }
         auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
         auto copies = FullDownloadCopies(image.info);
+        NoteLargeImage(image, "downloaded to guest memory");
         image.DownloadMemory(map, copies);
         pending_bytes += image.unswizzled_size_bytes;
         pending.push_back(Pending{image_id, map, std::move(copies)});
@@ -1639,6 +1642,23 @@ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
 
     Image& dst_image = slot_images[dst_id];
     Image& src_image = slot_images[src_id];
+    if (Settings::GetDebugKnobAt(0)) {
+        const auto describe = [&] {
+            return fmt::format(
+                "{}x{} at {:#x} (the {}x{} image of {} samples at {:#x}), [{},{}]-[{},{}], to "
+                "{}x{} at {:#x} (the {}x{} image of {} samples at {:#x}), [{},{}]-[{},{}], "
+                "filter {}, operation {}",
+                src.width, src.height, src.Address(), src_image.info.size.width,
+                src_image.info.size.height, src_image.info.num_samples, src_image.gpu_addr,
+                copy.src_x0, copy.src_y0, copy.src_x1, copy.src_y1, dst.width, dst.height,
+                dst.Address(), dst_image.info.size.width, dst_image.info.size.height,
+                dst_image.info.num_samples, dst_image.gpu_addr, copy.dst_x0, copy.dst_y0,
+                copy.dst_x1, copy.dst_y1, static_cast<u32>(copy.filter),
+                static_cast<u32>(copy.operation));
+        };
+        NoteLargeImage(dst_image, "a 2D copy's destination", describe());
+        NoteLargeImage(src_image, "a 2D copy's source", describe());
+    }
     if (Settings::GetDebugKnobAt(0) && dst_image.info.type == ImageType::e2D &&
         dst_image.info.resources.layers >= 2 && dst_image.info.resources.layers <= 16) {
         // Debug knob 1: 2D-engine copies into a cube or a small array.
@@ -2053,6 +2073,7 @@ void TextureCache<P>::CommitAsyncFlushes() {
                 if (download_info.is_swizzle) {
                     Image& image = download_info.GetImage(slot_images);
                     const auto copies = FullDownloadCopies(image.info);
+                    NoteLargeImage(image, "downloaded to guest memory");
                     image.DownloadMemory(download_map, copies);
                     download_map.offset += Common::AlignUp(image.unswizzled_size_bytes, 64);
                 }
@@ -2126,6 +2147,7 @@ void TextureCache<P>::PopAsyncFlushes() {
             }
             Image& image = download_info.GetImage(slot_images);
             const auto copies = FullDownloadCopies(image.info);
+            NoteLargeImage(image, "downloaded to guest memory");
             image.DownloadMemory(download_map, copies);
             download_map.offset += image.unswizzled_size_bytes;
         }
@@ -2156,6 +2178,9 @@ ImageId TextureCache<P>::DmaImageId(const Tegra::DMA::ImageOperand& operand, boo
         return NULL_IMAGE_ID;
     }
     auto& image = slot_images[dst_id];
+    NoteLargeImage(image, is_upload ? "a DMA copy's destination" : "a DMA copy's source",
+                   fmt::format("{}x{} at {:#x}", dst_info.size.width, dst_info.size.height,
+                               operand.address));
     if (is_upload && Settings::GetDebugKnobAt(0) && image.info.type == ImageType::e2D &&
         image.info.resources.layers >= 2 && image.info.resources.layers <= 16) {
         // Debug knob 1: where a copy into a cube or a small array goes.
@@ -2686,6 +2711,7 @@ template <typename StagingBuffer>
 void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) {
     const std::span<u8> mapped_span = staging.mapped_span;
     const GPUVAddr gpu_addr = image.gpu_addr;
+    NoteLargeImage(image, "uploaded from guest memory");
 
     if (True(image.flags & ImageFlagBits::AcceleratedUpload) && image.host_level_offset != 0) {
         // Only levels >= host_level_offset exist on the host: read each layer's tail of the mip
@@ -3376,6 +3402,12 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
     }
     Image& new_image = slot_images[new_image_id];
+    NoteLargeImage(new_image, "made",
+                   fmt::format("{} overlaps joined, {} aliases, {} bad overlaps",
+                               join_overlap_ids.size(),
+                               join_left_aliased_ids.size() + join_right_aliased_ids.size() +
+                                   join_samples_aliased_ids.size(),
+                               join_bad_overlap_ids.size()));
 
     new_image.allocation_tick = frame_tick;
     {
@@ -3881,6 +3913,8 @@ ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAdd
                      image.info.size.height, image.info.resources.layers, image.gpu_addr);
         }
     }
+    NoteLargeImage(image, clearing_render_targets ? "a clear's target" : "a draw's target",
+                   fmt::format("as {}x{} at {:#x}", info.size.width, info.size.height, gpu_addr));
     return FindOrEmplaceImageView(image_id, ImageViewInfo(view_type, info.format, range));
 }
 
@@ -4544,8 +4578,82 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
 }
 
 template <class P>
+std::string TextureCache<P>::CaptureAliasSources(
+    ImageViewId id, boost::container::small_vector<ImageViewId, 2>& out) {
+    std::string description;
+    if (!id) {
+        return description;
+    }
+    const ImageViewBase& view = slot_image_views[id];
+    if (view.IsBuffer() || !view.image_id) {
+        return description;
+    }
+    boost::container::small_vector<ImageId, 2> sources;
+    {
+        const ImageBase& image = slot_images[view.image_id];
+        if (image.info.type != ImageType::e2D || image.info.size.width < 512 ||
+            image.info.size.height < 256) {
+            return description;
+        }
+        for (const AliasedImage& alias : image.aliased_images) {
+            const ImageBase& other = slot_images[alias.id];
+            description += fmt::format(
+                R"({}{{"gpu_addr":"{:#x}","width":{},"height":{},"samples":{},"flags":{},"modified":{},"newer":{}}})",
+                description.empty() ? "" : ",", other.gpu_addr, other.info.size.width,
+                other.info.size.height, other.info.num_samples, static_cast<u32>(other.flags),
+                other.modification_tick, other.modification_tick > image.modification_tick);
+            if (other.info.type == ImageType::e2D && other.info.num_samples == 1 &&
+                True(other.flags & ImageFlagBits::GpuModified) &&
+                False(other.flags & ImageFlagBits::Unbacked) && sources.size() < 2) {
+                sources.push_back(alias.id);
+            }
+        }
+    }
+    for (const ImageId source : sources) {
+        const auto format = slot_images[source].info.format;
+        const SubresourceRange range{
+            .base = {.level = 0, .layer = 0},
+            .extent = {.levels = 1, .layers = 1},
+        };
+        out.push_back(
+            FindOrEmplaceImageView(source, ImageViewInfo(ImageViewType::e2D, format, range)));
+    }
+    return description;
+}
+
+template <class P>
+void TextureCache<P>::NoteLargeImage(const ImageBase& image, std::string_view what,
+                                     std::string_view detail) {
+    if (!Settings::GetDebugKnobAt(0) || image.info.type == ImageType::Linear ||
+        image.info.size.width < 1024 || image.info.size.height < 512) {
+        return;
+    }
+    u64 key = image.gpu_addr;
+    key = key * 31 + image.info.size.width;
+    key = key * 31 + image.info.size.height;
+    key = key * 31 + static_cast<u64>(image.info.num_samples);
+    key = key * 131 + std::hash<std::string_view>{}(what);
+    {
+        static std::mutex mutex;
+        static std::unordered_set<u64> noted;
+        std::scoped_lock lock{mutex};
+        if (noted.size() >= 192 || !noted.insert(key).second) {
+            return;
+        }
+    }
+    LOG_INFO(HW_GPU,
+             "Large image at {:#x}, {}x{} of {} samples, {} layers and {} levels (format {}, "
+             "flags {:#x}): {}{}{}",
+             image.gpu_addr, image.info.size.width, image.info.size.height,
+             image.info.num_samples, image.info.resources.layers, image.info.resources.levels,
+             static_cast<u32>(image.info.format), static_cast<u32>(image.flags), what,
+             detail.empty() ? "" : ", ", detail);
+}
+
+template <class P>
 void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool invalidate) {
     Image& image = slot_images[image_id];
+    NoteLargeImage(image, is_modification ? "written by a draw or a copy" : "read");
     if (invalidate) {
         image.flags &= ~(ImageFlagBits::CpuModified | ImageFlagBits::GpuModified);
         if (False(image.flags & ImageFlagBits::Tracked)) {
@@ -4641,6 +4749,10 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
             }
         }
     }
+    NoteLargeImage(dst, "copied into from an image over the same memory",
+                   fmt::format("the {}x{} one of {} samples at {:#x} (flags {:#x}), {} regions",
+                               src.info.size.width, src.info.size.height, src.info.num_samples,
+                               src.gpu_addr, static_cast<u32>(src.flags), copies.size()));
     if (dst.info.num_samples != src.info.num_samples) {
         // A samples alias (AddSamplesAlias): the extents count the destination's pixels.
         return runtime.CopyImageMSAA(dst, src, copies);

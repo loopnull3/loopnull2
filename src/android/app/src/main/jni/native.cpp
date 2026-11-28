@@ -68,6 +68,7 @@ extern "C" {
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/nca_probe.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs.h"
@@ -1804,6 +1805,29 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
                 reads[index].newest_key >= 0
                     ? fmt::format(", keys up to {:02X}", reads[index].newest_key)
                     : std::string{});
+        }
+        if (reason == "NHR0") {
+            // What such a file holds, since nothing reads it: how far it is laid out as an NCA
+            // and whether an installed key opens its content. The first file, and the smallest
+            // (a title's content list).
+            FileSys::VirtualFile smallest = first_file;
+            for (const auto& file : files) {
+                if (file->GetSize() < smallest->GetSize()) {
+                    smallest = file;
+                }
+            }
+            std::vector<FileSys::VirtualFile> probed{first_file};
+            if (smallest != first_file) {
+                probed.push_back(smallest);
+            }
+            for (const auto& file : probed) {
+                const auto probe = FileSys::ProbeNca(file);
+                for (const std::string& line : probe.lines) {
+                    LOG_INFO(Frontend, "Firmware files (NHR0) {}: {}", file->GetName(), line);
+                }
+                g_firmware_files_problem +=
+                    fmt::format("\n{}: {}", file->GetName(), probe.verdict);
+            }
         }
     }
     return 0;

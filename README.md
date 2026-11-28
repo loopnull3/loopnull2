@@ -306,7 +306,19 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
   the clear where an NCA has its encrypted header (the S26's 299-file archive does), a format
   that neither this app nor Orchid reads and that no public description was found for. The
   dialog names it. What can be installed is a Switch firmware, or a Switch 2 firmware converted
-  to decrypted NCA files.
+  to decrypted NCA files. A write-up of updating a Switch 2 from a Switch
+  ([AlbertDev1/switch2-local-update-23.0.1-exfat](https://github.com/AlbertDev1/switch2-local-update-23.0.1-exfat),
+  `TECHNICAL_WRITEUP.md`) says the same of the console: a Switch's own file system service
+  fails to mount these files, and that project passes them on unread. It gives no layout. Its
+  table of the 23.0.1 system update (299 files: 150 content lists and 149 contents) names the
+  home menu's program as a 25.9 MiB file.
+- **What such a file holds is checked at the install**, since no description exists
+  (`src/core/file_sys/nca_probe.cpp`): how much of the header is in the clear, whether its
+  fields and its file system headers are an NCA's (each file system header has its hash in the
+  header), and whether any installed key opens the content (the key is the one that makes a
+  hash layer match). The `Firmware files (NHR0)` lines of the log and a line of the dialog say
+  it. Only when the installed keys open the content can a reader for the format be written
+  from what the user has.
 - **QLaunch** boots the Switch 2's home menu when its firmware is installed, else the Switch's.
   With both, the applet list has an entry for each.
 - The home menu's own applets are looked for under `04`, a Switch 2 program is told its own
@@ -349,8 +361,11 @@ one's size, format and lowest, highest and mean values, a map of where a large p
 black, and a line for each clear, copy and upload. To capture a picture as you see it wrong,
 pause the emulation on it and resume: the two frames after a resume are captured too. A cube or a small array is read layer by layer, and for
 those of 2 to 16 layers the log also says what guest memory held for each layer at every upload,
-which images were found where one was made, and where DMA copies into one went. Set it back to
-0 afterwards: a capture stalls the game for a moment.
+which images were found where one was made, and where DMA copies into one went. For each large
+image the log says once what is done with it (made, drawn into, read, uploaded, copied), and a
+capture also takes the image a large texture is brought up to date from: a picture can be wrong
+in a texture the game filled long before the frame that shows it. Set it back to 0 afterwards:
+a capture stalls the game for a moment.
 
 ## Building
 
