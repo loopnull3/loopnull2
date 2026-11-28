@@ -150,8 +150,17 @@ struct Values {
                                           Category::LibraryApplet};
     Setting<AppletMode> net_connect_applet_mode{linkage, AppletMode::LLE, "net_connect_applet_mode",
                                                 Category::LibraryApplet};
+    // The console's own user selection where a firmware is installed, except on Android, which
+    // asks with a list of its own: there the console's ended in a fatal error at its start and
+    // the game waited for it for good (Minecraft's second player on the S26).
     SwitchableSetting<AppletMode> player_select_applet_mode{
-                                                  linkage, AppletMode::LLE, "player_select_applet_mode", Category::LibraryApplet};
+        linkage,
+#ifdef __ANDROID__
+        AppletMode::HLE,
+#else
+        AppletMode::LLE,
+#endif
+        "player_select_applet_mode", Category::LibraryApplet};
     SwitchableSetting<AppletMode> swkbd_applet_mode{linkage, AppletMode::HLE, "swkbd_applet_mode",
                                           Category::LibraryApplet};
     SwitchableSetting<AppletMode> mii_edit_applet_mode{linkage, AppletMode::LLE, "mii_edit_applet_mode",

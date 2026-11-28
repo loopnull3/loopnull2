@@ -261,7 +261,10 @@ read as a confirm key to a list), nor does any key in its first half second. If 
 up within two seconds nobody can be asked, and the game gets the user it was started with or,
 once the selection gave that one, the first not given yet. The log follows each step
 (`[UserSelect]` and `User selection:` lines) and the service commands the game sends after it
-was given a user (`ipc ...` lines, 300 of them).
+was given a user (`ipc ...` lines, 300 of them). With a Switch firmware installed the selection
+would be the console's own program, as upstream has it; on the S26 that program ended in a
+fatal error at its start and the game waited for it for good, so on Android the list is the
+default (`player_select_applet_mode`).
 
 Minecraft itself, as players of the console describe it: the world's "Multiplayer Game" switch
 is the online play, which asks for a Nintendo Switch Online membership (an emulator has none),
