@@ -1872,6 +1872,10 @@ void EmitContext::DefineInputs(const IR::Program& program) {
                 Decorate(id, spv::Decoration::Flat);
                 break;
             }
+            if (info.centroid_generics[index] &&
+                info.interpolation[index] != Interpolation::Flat) {
+                Decorate(id, spv::Decoration::Centroid);
+            }
         }
     }
     if (stage == Stage::TessellationEval) {

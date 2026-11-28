@@ -2143,6 +2143,19 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                          key.unique_hashes[index], stage_index);
             }
         }
+        if (program.stage == Shader::Stage::Fragment && Settings::GetDebugKnobAt(0)) {
+            // Debug knob 1: fragment programs that read inputs at the centroid.
+            u32 centroid_mask = 0;
+            for (size_t generic = 0; generic < program.info.centroid_generics.size(); ++generic) {
+                centroid_mask |= program.info.centroid_generics[generic] ? 1U << generic : 0U;
+            }
+            static std::atomic<u32> logged{};
+            if (centroid_mask != 0 && logged.fetch_add(1, std::memory_order_relaxed) < 24) {
+                LOG_INFO(Render_Vulkan,
+                         "Program {:016x} reads its inputs {:#x} at the centroid of the samples",
+                         key.unique_hashes[index], centroid_mask);
+            }
+        }
 
         auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage, device)};
         if (mesh_emulation && (program.stage == Shader::Stage::Mesh ||

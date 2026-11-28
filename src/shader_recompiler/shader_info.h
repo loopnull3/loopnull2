@@ -300,6 +300,8 @@ struct Info {
     std::array<bool, 30> uses_patches{};
 
     std::array<Interpolation, 32> interpolation{};
+    /// Fragment inputs the program reads at the centroid of the covered samples (IPA sample mode).
+    std::array<bool, 32> centroid_generics{};
     VaryingState loads;
     VaryingState stores;
     VaryingState passthrough;

@@ -166,6 +166,12 @@ void TranslatorVisitor::IPA(u64 insn) {
     const IR::Attribute attribute{ipa.attribute};
     IR::F32 value{is_indexed ? ir.GetAttributeIndexed(X(ipa.index_reg))
                              : ir.GetAttribute(attribute)};
+    if (!is_indexed && ipa.sample_mode == SampleMode::Centroid && IR::IsGeneric(attribute)) {
+        // Interpolated at the centroid of the covered samples, not at the pixel's centre: under
+        // multisampling a texture coordinate read at a centre outside the triangle leaves its
+        // tile of an atlas (Minecraft's block edges drew dashes of the next tile).
+        value.Inst()->SetFlags(IR::CENTROID_ATTRIBUTE_LOAD);
+    }
     const bool is_legacy{IR::IsLegacyAttribute(attribute)};
     if (IR::IsGeneric(attribute) || is_legacy) {
         bool is_perspective{is_legacy &&

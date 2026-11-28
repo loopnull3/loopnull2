@@ -467,6 +467,10 @@ void VisitUsages(Info& info, IR::Inst& inst) {
     case IR::Opcode::GetAttribute:
     case IR::Opcode::GetAttributeU32:
         info.loads.mask[static_cast<size_t>(inst.Arg(0).Attribute())] = true;
+        if (inst.Flags<u32>() == IR::CENTROID_ATTRIBUTE_LOAD &&
+            IR::IsGeneric(inst.Arg(0).Attribute())) {
+            info.centroid_generics[IR::GenericAttributeIndex(inst.Arg(0).Attribute())] = true;
+        }
         break;
     case IR::Opcode::SetAttribute:
         info.stores.mask[static_cast<size_t>(inst.Arg(0).Attribute())] = true;

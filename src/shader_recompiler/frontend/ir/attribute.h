@@ -236,6 +236,9 @@ enum class Attribute : u64 {
 constexpr size_t NUM_GENERICS = 32;
 constexpr size_t NUM_FIXEDFNCTEXTURE = 10;
 
+/// Flags of a GetAttribute a fragment program reads at the centroid of the covered samples.
+constexpr u32 CENTROID_ATTRIBUTE_LOAD = 1;
+
 [[nodiscard]] inline bool IsGeneric(Attribute attribute) noexcept {
     return attribute >= Attribute::Generic0X && attribute <= Attribute::Generic31W;
 }
