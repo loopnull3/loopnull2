@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string_view>
+
 #include "common/settings.h"
 #include "common/scope_exit.h"
 #include "core/hle/kernel/svc_results.h"
@@ -25,13 +27,41 @@ namespace Service::AM {
 
 namespace {
 
+// Where a launch from the home menu takes its program from, for the log.
+std::string_view ProgramSource(const FileSys::ContentProviderUnion::ApplicationProgram& source) {
+    if (source.loader_backed) {
+        return "its game file";
+    }
+    switch (source.slot) {
+    case FileSys::ContentProviderUnionSlot::SysNAND:
+        return "the system NAND";
+    case FileSys::ContentProviderUnionSlot::UserNAND:
+        return "the user NAND";
+    case FileSys::ContentProviderUnionSlot::SDMC:
+        return "the SD card";
+    case FileSys::ContentProviderUnionSlot::FrontendManual:
+        return "the game list's content";
+    case FileSys::ContentProviderUnionSlot::External:
+        return "the external content";
+    default:
+        return "an unknown slot";
+    }
+}
+
 Result CreateGuestApplication(SharedPointer<IApplicationAccessor>* out_application_accessor, Core::System& system, WindowSystem& window_system, u64 program_id) {
     const auto source = system.GetContentProviderUnion().GetApplicationProgram(program_id);
-    R_UNLESS(source.file != nullptr, ResultUnknown);
+    if (source.file == nullptr) {
+        LOG_WARNING(Service_AM,
+                    "Application {:016X} is in no content provider and has no game file registered",
+                    program_id);
+        R_THROW(ResultUnknown);
+    }
+    const auto from = ProgramSource(source);
     if ((source.loader_backed || (program_id >> 56) == 0x04) &&
         !Settings::CurrentProgramIsSwitch2()) {
-        LOG_WARNING(Service_AM, "Switch 2 application {:016X} requires Switch 2 Home Menu firmware",
-                    program_id);
+        LOG_WARNING(Service_AM,
+                    "Switch 2 application {:016X} (from {}) requires Switch 2 Home Menu firmware",
+                    program_id, from);
         R_THROW(ResultUnknown);
     }
 
@@ -41,12 +71,14 @@ Result CreateGuestApplication(SharedPointer<IApplicationAccessor>* out_applicati
     auto process = CreateApplicationProcess(control, loader, result, system, source.file,
                                             program_id, 0, source.slot);
     if (!process) {
-        LOG_WARNING(Service_AM, "Loading application {:016X} failed with loader result {}",
-                    program_id, static_cast<u16>(result));
+        LOG_WARNING(Service_AM, "Loading application {:016X} from {} failed with loader result {}",
+                    program_id, from, static_cast<u16>(result));
         R_THROW(ResultUnknown);
     }
-    LOG_INFO(Service_AM, "Loaded Home Menu application {:016X} ({}), process program {:016X}",
-             program_id, Loader::GetFileTypeString(loader->GetFileType()), process->GetProgramId());
+    LOG_INFO(Service_AM,
+             "Loaded Home Menu application {:016X} from {} ({}), process program {:016X}",
+             program_id, from, Loader::GetFileTypeString(loader->GetFileType()),
+             process->GetProgramId());
 
     const auto applet = std::make_shared<Applet>(system, std::move(process), true);
     applet->owned_by_application_creator = true;
@@ -83,7 +115,11 @@ IApplicationCreator::~IApplicationCreator() = default;
 Result IApplicationCreator::CreateApplication(
     Out<SharedPointer<IApplicationAccessor>> out_application_accessor, u64 application_id) {
     LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
-    R_UNLESS(m_window_system.ReserveApplicationSlot(), Kernel::ResultBusy);
+    if (!m_window_system.ReserveApplicationSlot()) {
+        LOG_WARNING(Service_AM, "Application {:016X} not created: the application slot is taken",
+                    application_id);
+        R_THROW(Kernel::ResultBusy);
+    }
     SCOPE_EXIT { m_window_system.ReleaseApplicationSlotReservation(); };
     R_TRY(CreateGuestApplication(out_application_accessor, system, m_window_system, application_id));
     Core::LaunchTimestampCache::SaveLaunchTimestamp(application_id);

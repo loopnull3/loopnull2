@@ -59,8 +59,10 @@ IApplicationAccessor::IApplicationAccessor(Core::System& system_, std::shared_pt
 IApplicationAccessor::~IApplicationAccessor() = default;
 
 Result IApplicationAccessor::Start() {
-    LOG_INFO(Service_AM, "called");
-    R_RETURN(m_window_system.StartApplication(*m_applet));
+    const auto result = m_window_system.StartApplication(*m_applet);
+    LOG_INFO(Service_AM, "called, application {:016X} {}", m_applet->program_id,
+             result.IsSuccess() ? "started" : "did not start");
+    R_RETURN(result);
 }
 
 Result IApplicationAccessor::RequestExit() {

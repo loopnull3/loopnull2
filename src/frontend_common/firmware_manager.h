@@ -64,17 +64,16 @@ enum FirmwareCheckResult {
  * \return Whether or not the system has installed firmware.
  */
 /**
- * \brief Checks for an installed Switch 2 firmware (its home menu and the other system titles).
+ * \brief Checks for an installed Switch 2 firmware by its home menu, the title QLaunch boots.
  * A Switch firmware may be installed beside it; each needs its own console's keys.
  */
 inline bool CheckSwitch2FirmwarePresence(Core::System &system)
 {
-    constexpr u64 MiiEditId = Service::AM::Switch2ProgramId(
-        static_cast<u64>(Service::AM::AppletProgramId::MiiEdit));
+    constexpr u64 HomeMenuId = static_cast<u64>(Service::AM::AppletProgramId::QLaunchNx2);
 
     auto bis_system = system.GetFileSystemController().GetSystemNANDContents();
     return bis_system
-           && bis_system->GetEntry(MiiEditId, FileSys::ContentRecordType::Program) != nullptr;
+           && bis_system->GetEntry(HomeMenuId, FileSys::ContentRecordType::Program) != nullptr;
 }
 
 inline bool CheckFirmwarePresence(Core::System &system)

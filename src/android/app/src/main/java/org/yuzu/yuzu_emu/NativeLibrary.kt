@@ -683,6 +683,22 @@ object NativeLibrary {
     external fun clearFilesystemProvider()
 
     /**
+     * Tells the core that the game list scan that began with [clearFilesystemProvider] has
+     * registered all its games: a home menu lists and starts the games of the provider.
+     */
+    external fun setGamesRegistered()
+
+    /**
+     * Whether a game list scan has filled the filesystem provider that is in use now.
+     */
+    external fun areGamesRegistered(): Boolean
+
+    /**
+     * Whether the applet set by [setCurrentAppletId] for the next launch is the home menu.
+     */
+    external fun isHomeMenuLaunch(): Boolean
+
+    /**
      * Gets the current virtual amiibo state reported by the core.
      *
      * @return Native enum value for the current amiibo state.

@@ -2480,6 +2480,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                     NativeLibrary.surfaceChanged(currentSurface)
                     emulationThread = Thread({
                         Log.debug("[EmulationFragment] Starting emulation thread.")
+                        runCatching { GameHelper.registerGamesForHomeMenu() }.onFailure {
+                            Log.warning("[EmulationFragment] Game scan for the home menu: $it")
+                        }
                         NativeLibrary.run(gamePath, programIndex, true)
                     }, "NativeEmulation")
                     emulationThread.start()

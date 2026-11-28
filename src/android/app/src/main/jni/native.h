@@ -52,6 +52,10 @@ public:
     int ShadersBuilding();
     void ConfigureFilesystemProvider(const std::string& filepath);
     void ConfigureFilesystemProviderFromGameFolder(const std::string& filepath);
+    void ClearFilesystemProvider();
+    void SetGamesRegistered();
+    bool AreGamesRegistered() const;
+    bool IsHomeMenuLaunch() const;
     void InitializeSystem(bool reload);
     void SetAppletId(int applet_id);
     Core::SystemResultStatus InitializeEmulation(const std::string& filepath,
@@ -69,6 +73,7 @@ private:
     static void OnEmulationStopped(Core::SystemResultStatus result);
     static void ChangeProgram(std::size_t program_index);
     void ReloadDiskShaderCache(u64 program_id);
+    void LogHomeMenuLaunch(const std::string& filepath);
 
 private:
     // Window management
@@ -86,6 +91,12 @@ private:
     std::atomic<bool> m_is_paused = false;
     Common::Android::SoftwareKeyboard::AndroidKeyboard* m_software_keyboard{};
     std::unique_ptr<FileSys::ManualContentProvider> m_manual_provider;
+    // A game list scan clears m_manual_provider, registers its games and then says so: a home
+    // menu lists and starts what is in it, and boots after a scan has filled it.
+    std::atomic<bool> m_game_scan_open = false;
+    std::atomic<bool> m_games_registered = false;
+    // A Switch 2 home menu is the booted title: the games it starts are processes of its own.
+    std::atomic<bool> m_native_home_menu_running = false;
     int m_applet_id{1};
     std::optional<u64> m_pending_shader_cache_title;
 

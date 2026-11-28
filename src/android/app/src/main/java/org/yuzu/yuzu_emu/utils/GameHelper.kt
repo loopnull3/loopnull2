@@ -40,7 +40,27 @@ object GameHelper {
 
     private lateinit var preferences: SharedPreferences
 
-    fun getGames(): List<Game> {
+    // One scan at a time: a scan clears the filesystem provider and fills it again.
+    private val scanLock = Any()
+
+    fun getGames(): List<Game> = synchronized(scanLock) { scanGames() }
+
+    // A home menu lists and starts the games a scan has put into the filesystem provider. Called
+    // before one boots: waits for a running scan, and scans when the provider in use has not
+    // been filled by one (a firmware install makes a new provider).
+    fun registerGamesForHomeMenu() {
+        if (!NativeLibrary.isHomeMenuLaunch()) {
+            return
+        }
+        synchronized(scanLock) {
+            if (!NativeLibrary.areGamesRegistered()) {
+                Log.info("[GameHelper] Home menu: scanning the game list before it boots")
+                scanGames()
+            }
+        }
+    }
+
+    private fun scanGames(): List<Game> {
         val games = mutableListOf<Game>()
         val gamesByProgramId = mutableMapOf<String, Game>()
         val context = YuzuApplication.appContext
@@ -110,6 +130,7 @@ object GameHelper {
             }
         }
         NativeConfig.setGameDirs(gameDirs.toTypedArray())
+        NativeLibrary.setGamesRegistered()
 
         // Cache list of games found on disk
         val serializedGames = mutableSetOf<String>()
@@ -167,6 +188,8 @@ object GameHelper {
                 return@forEach
             }
             games.add(game)
+            // For a home menu: it starts the game from this file.
+            NativeLibrary.addFileToFilesystemProvider(game.path)
             if (preferences.getLong(game.keyAddedToLibraryTime, 0L) == 0L) {
                 preferences.edit {
                     putLong(game.keyAddedToLibraryTime, System.currentTimeMillis())
@@ -252,6 +275,11 @@ object GameHelper {
                     val game = getGame(it.uri, true, false)
                     if (game != null) {
                         games.add(game)
+                        // Containers are mounted above. An NCA or a NUP is registered here, for
+                        // a home menu: it lists and starts the games of this list.
+                        if (!externalContentExtensions.contains(extension)) {
+                            NativeLibrary.addFileToFilesystemProvider(filePath)
+                        }
                         if (game.programId != "0") {
                             gamesByProgramId[game.programId] = game
                         }

@@ -250,12 +250,13 @@ void EmulationSession::ConfigureFilesystemProvider(const std::string& filepath) 
         return;
     }
 
-    u64 program_id = 0;
-    const auto res2 = loader->ReadProgramId(program_id);
-    if (res2 == Loader::ResultStatus::Success && file_type == Loader::FileType::NCA) {
-        m_manual_provider->AddEntry(FileSys::TitleType::Application,
-                                    FileSys::GetCRTypeFromNCAType(FileSys::NCA{file}.GetType()),
-                                    program_id, file);
+    // As Orchid's game list does: a firmware title is no game, and a Switch 2 game without an NCA
+    // (a NUP container, a loose ExeFS) is kept by its file, for a home menu to list and start.
+    if (file_type == Loader::FileType::NCA) {
+        m_manual_provider->RegisterApplicationNca(*loader, file);
+    } else if (file_type == Loader::FileType::NUP ||
+               file_type == Loader::FileType::DeconstructedRomDirectory) {
+        m_manual_provider->RegisterApplicationFile(*loader, file);
     }
 }
 
@@ -264,6 +265,52 @@ void EmulationSession::ConfigureFilesystemProviderFromGameFolder(const std::stri
         return;
     }
     ConfigureFilesystemProvider(filepath);
+}
+
+void EmulationSession::ClearFilesystemProvider() {
+    m_games_registered = false;
+    m_game_scan_open = true;
+    m_manual_provider->ClearAllEntries();
+}
+
+void EmulationSession::SetGamesRegistered() {
+    // (Not when the provider was made anew while the scan ran: that scan filled another one.)
+    m_games_registered = m_game_scan_open.exchange(false);
+}
+
+bool EmulationSession::AreGamesRegistered() const {
+    return m_games_registered;
+}
+
+bool EmulationSession::IsHomeMenuLaunch() const {
+    return m_applet_id == static_cast<int>(Service::AM::AppletId::QLaunch);
+}
+
+void EmulationSession::LogHomeMenuLaunch(const std::string& filepath) {
+    u64 title_id{};
+    if (const auto file = m_system.GetFilesystem()->OpenFile(filepath, FileSys::OpenMode::Read)) {
+        if (const auto loader = Loader::GetLoader(m_system, file)) {
+            loader->ReadProgramId(title_id);
+        }
+    }
+    LOG_INFO(Frontend, "Home menu: booting title {:016X} ({})", title_id,
+             title_id == static_cast<u64>(Service::AM::AppletProgramId::QLaunchNx2)
+                 ? "Switch 2 home menu"
+                 : title_id == static_cast<u64>(Service::AM::AppletProgramId::QLaunch)
+                       ? "Switch home menu"
+                       : "not a home menu title");
+
+    std::string ids;
+    const auto files = m_manual_provider->ListApplicationFiles();
+    for (const u64 id : files) {
+        ids += fmt::format(" {:016X}", id);
+    }
+    LOG_INFO(Frontend,
+             "Home menu: {} game files registered (NUP, loose ExeFS):{}; {} applications to list "
+             "in all; game list scan {}",
+             files.size(), ids.empty() ? " none" : ids,
+             m_system.GetContentProviderUnion().ListApplicationIds().size(),
+             m_games_registered ? "done" : "not done");
 }
 
 void EmulationSession::InitializeSystem(bool reload) {
@@ -296,6 +343,8 @@ void EmulationSession::InitializeSystem(bool reload) {
     m_system.SetFilesystem(m_vfs);
     m_system.GetUserChannel().clear();
     m_manual_provider = std::make_unique<FileSys::ManualContentProvider>();
+    m_games_registered = false;
+    m_game_scan_open = false;
     m_system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
     m_system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual,
                                      m_manual_provider.get());
@@ -308,14 +357,16 @@ void EmulationSession::InitializeSystem(bool reload) {
         for (const auto& entry : bis_system->ListEntries()) {
             ((entry.title_id >> 56) == 0x04 ? switch2_entries : switch_entries)++;
         }
-        const auto has_program = [&](u64 title_id) {
-            return bis_system->GetEntry(title_id, FileSys::ContentRecordType::Program) != nullptr;
+        const auto has_program = [&](Service::AM::AppletProgramId title) {
+            return bis_system->GetEntry(static_cast<u64>(title),
+                                        FileSys::ContentRecordType::Program) != nullptr;
         };
         LOG_INFO(Frontend,
                  "System titles: {} entries of a Switch firmware, {} of a Switch 2 firmware; "
                  "home menu: Switch {}, Switch 2 {}; key files beside prod.keys: {}",
-                 switch_entries, switch2_entries, has_program(0x0100000000001000ULL) ? "yes" : "no",
-                 has_program(0x0400000000001000ULL) ? "yes" : "no",
+                 switch_entries, switch2_entries,
+                 has_program(Service::AM::AppletProgramId::QLaunch) ? "yes" : "no",
+                 has_program(Service::AM::AppletProgramId::QLaunchNx2) ? "yes" : "no",
                  Core::Crypto::KeyManager::Alternates().size());
         LOG_INFO(Frontend, "Keys: prod.keys has {}",
                  Core::Crypto::KeyManager::Instance().Describe());
@@ -362,6 +413,9 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
 
     // Initialize filesystem.
     ConfigureFilesystemProvider(filepath);
+    if (m_applet_id == static_cast<int>(Service::AM::AppletId::QLaunch)) {
+        LogHomeMenuLaunch(filepath);
+    }
 
     // Load the ROM.
     const u64 previous_program_id =
@@ -387,6 +441,10 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     if (m_load_result != Core::SystemResultStatus::Success) {
         return m_load_result;
     }
+    // (Load leaves the booted title's id in the parameters.)
+    m_native_home_menu_running =
+        params.applet_id == Service::AM::AppletId::QLaunch &&
+        params.program_id == static_cast<u64>(Service::AM::AppletProgramId::QLaunchNx2);
 
     // Complete initialization.
     m_system.GPU().Start();
@@ -398,6 +456,12 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
 
     // Register an ExecuteProgram callback such that Core can execute a sub-program
     m_system.RegisterExecuteProgramCallback([&](std::size_t program_index_) {
+        // The frontend would boot the home menu's own file again: as in Orchid, no restart and
+        // no program change while a Switch 2 home menu runs.
+        if (m_native_home_menu_running) {
+            LOG_WARNING(Frontend, "Home menu: change to program index {} ignored", program_index_);
+            return;
+        }
         m_next_program_id = m_system.GetApplicationProcessProgramID();
         m_next_program_index = program_index_;
         EmulationSession::GetInstance().HaltEmulation();
@@ -416,6 +480,7 @@ void EmulationSession::ShutdownEmulation() {
     }
 
     m_is_running = false;
+    m_native_home_menu_running = false;
 
     // Unload user input.
     m_system.HIDCore().UnloadInputDevices();
@@ -1910,7 +1975,19 @@ void Java_org_yuzu_yuzu_1emu_NativeLibrary_addGameFolderFileToFilesystemProvider
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_clearFilesystemProvider(JNIEnv* env, jobject jobj) {
-    EmulationSession::GetInstance().GetContentProvider()->ClearAllEntries();
+    EmulationSession::GetInstance().ClearFilesystemProvider();
+}
+
+void Java_org_yuzu_yuzu_1emu_NativeLibrary_setGamesRegistered(JNIEnv* env, jobject jobj) {
+    EmulationSession::GetInstance().SetGamesRegistered();
+}
+
+jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_areGamesRegistered(JNIEnv* env, jobject jobj) {
+    return EmulationSession::GetInstance().AreGamesRegistered();
+}
+
+jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_isHomeMenuLaunch(JNIEnv* env, jobject jobj) {
+    return EmulationSession::GetInstance().IsHomeMenuLaunch();
 }
 
 jboolean Java_org_yuzu_yuzu_1emu_NativeLibrary_areKeysPresent(JNIEnv* env, jobject jobj) {
