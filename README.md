@@ -257,6 +257,9 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
 - **Install firmware** tells the console from the first file that opens and replaces only that
   console's files. When the installed keys open none of the files it says so and changes
   nothing: install that console's keys first.
+  The files are the `.nca` entries of the archive's root or of a folder inside it (other entries, a
+  readme say, are left out, and one kept as a folder of parts is taken as it is); an archive with
+  none says what it holds instead.
 - **QLaunch** boots the Switch 2's home menu when its firmware is installed, else the Switch's.
   With both, the applet list has an entry for each.
 - The home menu's own applets are looked for under `04`, a Switch 2 program is told its own

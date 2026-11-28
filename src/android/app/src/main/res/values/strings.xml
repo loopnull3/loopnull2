@@ -403,6 +403,7 @@
     <string name="firmware_installing">Installing firmware</string>
     <string name="firmware_installed_failure">Firmware installation failed</string>
     <string name="firmware_installed_failure_description">Make sure the firmware nca files are at the root of the zip and try again.</string>
+    <string name="firmware_no_nca_description">No .nca files were found in the zip, neither at its root nor in a folder inside it. It holds %1$d files, the first ones: %2$s</string>
     <string name="firmware_unreadable_description">The installed keys cannot open this firmware. Install the keys of the same console first, then install the firmware again. Nothing was changed.</string>
     <string name="firmware_uninstalled_failure">Firmware uninstallation failed</string>
     <string name="share_log">Share debug logs</string>

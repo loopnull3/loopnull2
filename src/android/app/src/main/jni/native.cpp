@@ -1560,10 +1560,23 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
     int tried = 0;
     Loader::ResultStatus first_status = Loader::ResultStatus::Success;
     FileSys::VirtualFile first_file;
+    // The .nca files, and the first part of each one kept as a folder of parts (a console's own
+    // layout): the header is there.
+    std::vector<FileSys::VirtualFile> files;
     for (const auto& file : dir->GetFiles()) {
-        if (file == nullptr || !file->GetName().ends_with(".nca")) {
+        if (file != nullptr && file->GetName().ends_with(".nca")) {
+            files.push_back(file);
+        }
+    }
+    for (const auto& parts : dir->GetSubdirectories()) {
+        if (parts == nullptr || !parts->GetName().ends_with(".nca")) {
             continue;
         }
+        if (auto first_part = parts->GetFile("00"); first_part != nullptr) {
+            files.push_back(std::move(first_part));
+        }
+    }
+    for (const auto& file : files) {
         const FileSys::NCA nca{file};
         const auto status = nca.GetStatus();
         if (status != Loader::ResultStatus::Success &&

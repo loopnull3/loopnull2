@@ -151,20 +151,31 @@ object InstallableActions {
                     cacheFirmwareDir,
                     progressCallback
                 )
-                val unfilteredNumOfFiles = cacheFirmwareDir.list()?.size ?: -1
-                val filteredNumOfFiles = cacheFirmwareDir.list(filterNCA)?.size ?: -2
+                // The firmware's files are the .nca entries of the archive's root, or of a folder
+                // inside it: archives often wrap them in one, or carry a readme beside them.
+                val filesDir = firmwareFilesDir(cacheFirmwareDir, filterNCA)
+                val names = filesDir?.list(filterNCA)?.sorted() ?: emptyList()
                 // 2 = a Switch 2 firmware, 1 = a Switch firmware, 0 = the installed keys open none
                 // of its files (the keys of that console come first)
-                val platform = if (unfilteredNumOfFiles == filteredNumOfFiles) {
-                    NativeLibrary.firmwareFilesPlatform(cacheFirmwareDir.path)
+                val platform = if (filesDir != null) {
+                    NativeLibrary.firmwareFilesPlatform(filesDir.path)
                 } else {
                     0
                 }
-                messageToShow = if (unfilteredNumOfFiles != filteredNumOfFiles) {
+                messageToShow = if (filesDir == null) {
+                    // Nothing to install: say what the archive holds instead.
+                    val entries = cacheFirmwareDir.walkTopDown()
+                        .filter { it.isFile }
+                        .map { it.relativeTo(cacheFirmwareDir).path }
+                        .toList()
                     MessageDialogFragment.newInstance(
                         activity,
                         titleId = R.string.firmware_installed_failure,
-                        descriptionId = R.string.firmware_installed_failure_description
+                        descriptionString = activity.getString(
+                            R.string.firmware_no_nca_description,
+                            entries.size,
+                            entries.take(4).joinToString(", ")
+                        )
                     )
                 } else if (platform == 0) {
                     MessageDialogFragment.newInstance(
@@ -185,7 +196,7 @@ object InstallableActions {
                     if (ownList.exists()) {
                         ownList.readLines().forEach {
                             if (it.isNotEmpty() && it !in otherNames) {
-                                File(firmwarePath, it).delete()
+                                File(firmwarePath, it).deleteRecursively()
                             }
                         }
                     } else if (platform == 1) {
@@ -193,8 +204,10 @@ object InstallableActions {
                             if (it.name !in otherNames) it.deleteRecursively()
                         }
                     }
-                    cacheFirmwareDir.copyRecursively(firmwarePath, overwrite = true)
-                    ownList.writeText(cacheFirmwareDir.list()?.joinToString("\n") ?: "")
+                    names.forEach {
+                        File(filesDir, it).copyRecursively(File(firmwarePath, it), overwrite = true)
+                    }
+                    ownList.writeText(names.joinToString("\n"))
                     NativeLibrary.initializeSystem(true)
                     homeViewModel.setCheckKeys(true)
                     activity.getString(R.string.save_file_imported_success)
@@ -209,6 +222,20 @@ object InstallableActions {
             onDialogComplete = onComplete
         }.show(fragmentManager, ProgressDialogFragment.TAG)
     }
+
+    /**
+     * The folder of an unpacked firmware archive that holds its .nca entries: the root, or the
+     * folder below it with the most of them. A folder named .nca is one file in parts, not a
+     * folder to look into.
+     */
+    private fun firmwareFilesDir(root: File, filter: FilenameFilter): File? =
+        root.walkTopDown()
+            .onEnter { it == root || !it.name.endsWith(".nca") }
+            .filter { it.isDirectory }
+            .map { it to (it.list(filter)?.size ?: 0) }
+            .filter { it.second > 0 }
+            .maxByOrNull { it.second }
+            ?.first
 
     /** The list of the files a firmware install put in the registered folder, kept beside it. */
     private fun firmwareListName(switch2: Boolean) =

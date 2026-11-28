@@ -229,6 +229,7 @@
     <string name="firmware_installing">펌웨어 설치 중...</string>
     <string name="firmware_installed_failure">펌웨어 설치 실패</string>
     <string name="firmware_installed_failure_description">펌웨어 NCA 파일이 ZIP 파일의 루트 디렉토리에 위치한지 확인하고 다시 시도하세요.</string>
+    <string name="firmware_no_nca_description">ZIP 안에서 .nca 파일을 찾지 못했습니다(루트에도, 안쪽 폴더에도 없음). ZIP에는 파일이 %1$d개 있고, 처음 몇 개는 다음과 같습니다: %2$s</string>
     <string name="firmware_unreadable_description">설치된 키로는 이 펌웨어를 읽을 수 없습니다. 같은 기기에서 뽑은 키를 먼저 설치한 뒤 펌웨어를 다시 설치하세요. 기존 펌웨어는 그대로입니다.</string>
     <string name="share_log">디버그 로그 공유</string>
     <string name="share_log_description">문제 해결을 위한 Hokkaido 로그 파일 공유</string>
