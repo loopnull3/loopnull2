@@ -40,9 +40,9 @@ public:
     /// capture once `trigger_file` exists. EDEN_NX2_FRAME_DUMP_SAMPLED reads back both the
     /// sampled textures and the bound buffers.
     void Configure(std::string_view at, std::filesystem::path trigger_file, bool sampled);
-    /// Captures the next frame for the debug server, which is told `id`. False while a capture
-    /// runs.
-    bool Arm(bool sampled, bool buffers, u64 id);
+    /// Captures the next frame for the debug server, which is told `id`, or the next `frames`
+    /// ones as one capture. False while a capture runs.
+    bool Arm(bool sampled, bool buffers, u64 id, u32 frames = 1);
     /// Once per presented frame: whether a capture starts with the next frame or has ended.
     Step Tick(double elapsed_seconds);
     /// The capture Tick started could not begin.
@@ -79,6 +79,9 @@ private:
     double trigger_seconds{std::numeric_limits<double>::infinity()};
     u64 frame{};
     u64 capture_id{};
+    /// Presented frames a capture spans, and how many of them are left.
+    u32 span{1};
+    u32 remaining{};
 };
 
 /// Whether pipelines keep the textures each draw and dispatch samples: only while a capture that
@@ -156,6 +159,9 @@ public:
     void NoteDraw(std::span<const u64> shader_hashes);
     /// A manifest line for the draw NoteDraw just counted: `state` is a list of JSON members.
     void NoteDrawState(std::string_view state);
+    /// A manifest line for something else that changes an image during the capture (a clear, a
+    /// copy between images, an upload): `members` is a list of JSON members.
+    void NoteEvent(std::string_view kind, std::string_view members);
     /// Captures the current pass; returns true when copies were recorded.
     bool EndPass();
     void CaptureDispatch(u64 shader_hash, std::span<ImageView* const> written);
@@ -166,9 +172,11 @@ public:
     /// Captures the next frame into `directory` for the debug server, which is told `id` once
     /// the manifest is complete. Works without EDEN_NX2_FRAME_DUMP.
     void Arm(std::filesystem::path directory, bool sampled, bool buffers, u64 id);
-    /// Captures the next frame and the textures it samples into `directory`, and repeats every
-    /// line of the manifest in the log: a report from a device with no debug server needs only
-    /// the log. False while another capture runs.
+    /// Captures the next two presented frames and the textures they sample into `directory`,
+    /// and repeats every line of the manifest in the log: a report from a device with no debug
+    /// server needs only the log. Two, because a game's frame is not cut where the emulator
+    /// presents (Minecraft's composite and resolve fell after the present). False while another
+    /// capture runs.
     bool ArmLogged(std::filesystem::path directory);
 
 private:
@@ -186,12 +194,16 @@ private:
         GPUVAddr gpu_addr;
         bool rescaled;
         bool msaa;
+        u32 samples;
+        VkFormat vk_format;
         DepthEncoding depth_encoding;
     };
 
     /// An image readback, or a buffer one (`raw`) of `bytes` bytes.
     struct Readback {
         vk::Buffer buffer;
+        /// The one-sample image a multisampled target was resolved into for the readback.
+        vk::Image resolved;
         Target target;
         std::string name;
         std::string tags;
@@ -215,6 +227,10 @@ private:
     static u32 TexelBytes(const Target& target);
     static int Decode(const Target& target, const u8* pixel, std::array<float, 4>& out);
     bool Record(const Target& target, std::string name, std::string tags);
+    /// Reads `target` back; through `resolved` when it is the one-sample copy of the
+    /// multisampled `source`.
+    bool RecordResolved(const Target& source, const Target& target, vk::Image resolved,
+                        std::string name, std::string tags);
     bool RecordSampled(const Sampled& texture, u32 index, std::string name, std::string tags);
     bool RecordBuffer(VkBuffer source, u32 offset, u32 size, std::string tags);
     void Drain();
@@ -261,6 +277,7 @@ private:
     u32 pass_first_draw{};
     u32 draws{};
     u32 dispatches{};
+    u32 events{};
 
     std::thread writer;
     std::mutex queue_mutex;

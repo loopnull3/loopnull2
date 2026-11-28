@@ -23,6 +23,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/texture_cache/formatter.h"
+#include "video_core/texture_cache/samples_helper.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
@@ -80,6 +81,14 @@ float Unorm16(u16 value) {
 }
 
 float Identity(float value) {
+    return value;
+}
+
+/// A Vulkan handle as a number, to tell one host image from the one that replaced it.
+template <typename Handle>
+u64 HandleValue(Handle handle) {
+    u64 value{};
+    std::memcpy(&value, &handle, (std::min)(sizeof(value), sizeof(handle)));
     return value;
 }
 
@@ -275,7 +284,7 @@ void FrameDump::Arm(std::filesystem::path directory_, bool sampled, bool buffers
 }
 
 bool FrameDump::ArmLogged(std::filesystem::path directory_) {
-    if (!schedule.Arm(true, false, 0)) {
+    if (!schedule.Arm(true, false, 0, 2)) {
         return false;
     }
     Reset(std::move(directory_));
@@ -305,6 +314,7 @@ void FrameDump::Reset(std::filesystem::path directory_) {
     pass_index = 0;
     draws = 0;
     dispatches = 0;
+    events = 0;
     if (start == std::chrono::steady_clock::time_point{}) {
         start = std::chrono::steady_clock::now();
     }
@@ -363,6 +373,9 @@ std::optional<FrameDump::Target> FrameDump::MakeTarget(ImageView& view, u32 slot
         .gpu_addr = image->gpu_addr,
         .rescaled = rescaled,
         .msaa = info.num_samples > 1,
+        .samples = static_cast<u32>(info.num_samples),
+        .vk_format = MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, false, info.format)
+                         .format,
         .depth_encoding = depth_encoding,
     };
 }
@@ -571,6 +584,16 @@ void FrameDump::NoteDrawState(std::string_view state) {
                                  draws - 1, state)});
 }
 
+void FrameDump::NoteEvent(std::string_view kind, std::string_view members) {
+    // Enough for a menu's frame; a world's thousands of uploads are cut off.
+    constexpr u32 MaxEvents = 384;
+    if (events++ >= MaxEvents) {
+        return;
+    }
+    Enqueue({.tags = fmt::format(R"({{"kind":"{}","pass":{},"after_draws":{},{}}})", kind,
+                                 pass_index, draws, members)});
+}
+
 bool FrameDump::EndPass() {
     if (!pass_framebuffer) {
         return false;
@@ -621,10 +644,53 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
                                            target.height, target.depth, target.gpu_addr)
                              : fmt::format("_{}_{}x{}_{:x}", target.format, target.width,
                                            target.height, target.gpu_addr);
+    vk::Image resolved;
     if (target.msaa) {
-        Enqueue({.tags = fmt::format(R"({{"name":"{}",{},"skipped":"msaa"}})", name, tags)});
-        return false;
+        // The driver's resolve of a multisampled colour target: what its samples average to.
+        const auto [samples_x, samples_y] =
+            VideoCommon::SamplesLog2(static_cast<int>(target.samples));
+        const bool resolvable = target.depth_encoding == DepthEncoding::None &&
+                                target.depth == 1 && !target.rescaled &&
+                                target.vk_format != VK_FORMAT_UNDEFINED &&
+                                !VideoCore::Surface::IsPixelFormatInteger(target.format);
+        if (resolvable) {
+            resolved = memory_allocator.TryCreateImage(VkImageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = target.vk_format,
+                .extent{target.width >> samples_x, target.height >> samples_y, 1},
+                .mipLevels = 1,
+                .arrayLayers = 1,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            });
+        }
+        if (!resolved) {
+            Enqueue({.tags = fmt::format(R"({{"name":"{}",{},"skipped":"msaa"}})", name, tags)});
+            return false;
+        }
+        Target single = target;
+        single.width >>= samples_x;
+        single.height >>= samples_y;
+        single.msaa = false;
+        tags += fmt::format(R"(,"resolved_from":{{"samples":{},"width":{},"height":{}}})",
+                            target.samples, target.width, target.height);
+        return RecordResolved(target, single, std::move(resolved), std::move(name),
+                              std::move(tags));
     }
+    return RecordResolved(target, target, std::move(resolved), std::move(name), std::move(tags));
+}
+
+bool FrameDump::RecordResolved(const Target& source, const Target& target, vk::Image resolved,
+                               std::string name, std::string tags) {
     const size_t size = size_t{target.width} * target.height * target.depth * TexelBytes(target);
     if (recorded_bytes + size > SIZE_CAP) {
         truncated = true;
@@ -648,14 +714,18 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
                               ? VkImageAspectFlags{VK_IMAGE_ASPECT_COLOR_BIT}
                               : VkImageAspectFlags{VK_IMAGE_ASPECT_DEPTH_BIT},
             .mipLevel = static_cast<u32>(target.level),
-            .baseArrayLayer = static_cast<u32>(target.layer),
+            // The resolved copy has the one layer.
+            .baseArrayLayer = resolved ? 0U : static_cast<u32>(target.layer),
             .layerCount = 1,
         },
         .imageOffset{0, 0, 0},
         .imageExtent{target.width, target.height, target.depth},
     };
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([image = target.image, destination = *buffer, copy](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([image = target.image, single = *resolved,
+                      source_layer = static_cast<u32>(source.layer),
+                      extent = VkExtent3D{target.width, target.height, 1}, destination = *buffer,
+                      copy](vk::CommandBuffer cmdbuf) {
         const VkMemoryBarrier before{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
@@ -663,7 +733,43 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
         };
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                0, before);
-        cmdbuf.CopyImageToBuffer(image, VK_IMAGE_LAYOUT_GENERAL, destination, copy);
+        VkImage read_image = image;
+        VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;
+        if (single != VK_NULL_HANDLE) {
+            constexpr VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = single,
+                .subresourceRange = range,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   0, barrier);
+            const VkImageResolve region{
+                .srcSubresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, source_layer, 1},
+                .srcOffset{0, 0, 0},
+                .dstSubresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                .dstOffset{0, 0, 0},
+                .extent = extent,
+            };
+            cmdbuf.ResolveImage(image, VK_IMAGE_LAYOUT_GENERAL, single,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   0, barrier);
+            read_image = single;
+            layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        }
+        cmdbuf.CopyImageToBuffer(read_image, layout, destination, copy);
         const VkMemoryBarrier after{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -675,7 +781,8 @@ bool FrameDump::Record(const Target& target, std::string name, std::string tags)
                                after);
     });
     pending_bytes += size;
-    readbacks.push_back({std::move(buffer), target, std::move(name), std::move(tags)});
+    readbacks.push_back(
+        {std::move(buffer), std::move(resolved), target, std::move(name), std::move(tags)});
     return true;
 }
 
@@ -800,6 +907,9 @@ void FrameDump::Write(const Job& job) {
     const u32 bytes_per_pixel = TexelBytes(target);
     const size_t pixels = size_t{target.width} * target.height * target.depth;
     const std::span<const u8> data = job.data;
+    constexpr u32 CELL = 32;
+    u32 cell_cols = 0;
+    std::vector<u8> cells;
     WriteFile(job.name + ".raw.zst",
               Common::Compression::CompressDataZSTDDefault(data.data(), data.size()));
     ++images;
@@ -817,8 +927,23 @@ void FrameDump::Write(const Job& job) {
         std::array<u64, 4> infs{};
         const bool encode = target.depth_encoding == DepthEncoding::None && IsFloat(target.format);
         std::vector<u8> rgb(pixels * 3);
+        // Large pictures get a map of 32x32 texel cells: black ones show a picture lost in tiles.
+        const bool map_cells =
+            target.depth == 1 && target.width >= 512 && target.height >= 256 && channels >= 3;
+        cell_cols = map_cells ? (target.width + CELL - 1) / CELL : 0;
+        const u32 cell_rows = map_cells ? (target.height + CELL - 1) / CELL : 0;
+        cells.assign(size_t{cell_cols} * cell_rows, 0);
         for (size_t index = 0; index < pixels; ++index) {
             Decode(target, data.data() + index * bytes_per_pixel, pixel);
+            if (map_cells) {
+                // Bit 0: a texel with colour; bit 1: one with alpha; bit 2: one without.
+                u8& cell = cells[(index / target.width / CELL) * cell_cols +
+                                 (index % target.width) / CELL];
+                if (pixel[0] != 0.0f || pixel[1] != 0.0f || pixel[2] != 0.0f) {
+                    cell |= 1;
+                }
+                cell |= channels < 4 || pixel[3] != 0.0f ? 2 : 4;
+            }
             bool finite = true;
             for (int c = 0; c < channels; ++c) {
                 const double value = pixel[c];
@@ -871,10 +996,24 @@ void FrameDump::Write(const Job& job) {
         }
     }
     Line(fmt::format(
-        R"({{"name":"{}",{},"format":"{}","width":{},"height":{},"depth":{},"level":{},"layer":{},"gpu_addr":"{:#x}","rescaled":{},"depth_encoding":{},"raw":"{}.raw.zst","png":{}{}}})",
+        R"({{"name":"{}",{},"format":"{}","width":{},"height":{},"depth":{},"level":{},"layer":{},"gpu_addr":"{:#x}","host":"{:#x}","samples":{},"rescaled":{},"depth_encoding":{},"raw":"{}.raw.zst","png":{}{}}})",
         job.name, job.tags, target.format, target.width, target.height, target.depth,
-        target.level, target.layer, target.gpu_addr, target.rescaled,
-        static_cast<u32>(target.depth_encoding), job.name, png, stats));
+        target.level, target.layer, target.gpu_addr, HandleValue(target.image), target.samples,
+        target.rescaled, static_cast<u32>(target.depth_encoding), job.name, png, stats));
+    // '#': black with alpha, 'o': all zero, '+': black, some of it with alpha, '.': a picture.
+    if (std::ranges::any_of(cells, [](u8 cell) { return (cell & 1) == 0; })) {
+        std::string map;
+        for (size_t first = 0; first < cells.size(); first += cell_cols) {
+            map += first == 0 ? "\"" : ",\"";
+            for (size_t index = first; index < first + cell_cols; ++index) {
+                const u8 cell = cells[index];
+                map += (cell & 1) != 0 ? '.' : (cell & 6) == 2 ? '#' : (cell & 6) == 4 ? 'o' : '+';
+            }
+            map += '"';
+        }
+        Line(fmt::format(R"({{"kind":"cells","name":"{}","cell":{},"cols":{},"rows":{},"map":[{}]}})",
+                         job.name, CELL, cell_cols, cells.size() / cell_cols, map));
+    }
 }
 
 void FrameDump::WriteBuffer(const Job& job) {
@@ -913,6 +1052,10 @@ void FrameDump::TickFrame() {
         break;
     }
     std::error_code error;
+    if (log_lines) {
+        // A device's own capture: its folder keeps the newest one only.
+        std::filesystem::remove_all(directory, error);
+    }
     std::filesystem::create_directories(directory, error);
     manifest.open(directory / "manifest.jsonl", std::ios::trunc);
     if (!manifest) {
@@ -945,7 +1088,7 @@ void FrameDumpSchedule::Configure(std::string_view at, std::filesystem::path tri
     }
 }
 
-bool FrameDumpSchedule::Arm(bool sampled_, bool buffers_, u64 id) {
+bool FrameDumpSchedule::Arm(bool sampled_, bool buffers_, u64 id, u32 frames) {
     if (capturing) {
         return false;
     }
@@ -955,6 +1098,7 @@ bool FrameDumpSchedule::Arm(bool sampled_, bool buffers_, u64 id) {
     buffers = buffers_;
     trigger_frame = 0;
     capture_id = id;
+    span = (std::max)(frames, 1U);
     return true;
 }
 
@@ -964,6 +1108,10 @@ FrameDumpSchedule::Step FrameDumpSchedule::Tick(double elapsed_seconds) {
     }
     ++frame;
     if (capturing) {
+        if (remaining > 1) {
+            --remaining;
+            return Step::None;
+        }
         SetCapturing(false);
         done = true;
         return Step::Finish;
@@ -974,6 +1122,7 @@ FrameDumpSchedule::Step FrameDumpSchedule::Tick(double elapsed_seconds) {
          !std::filesystem::exists(trigger_file, error))) {
         return Step::None;
     }
+    remaining = span;
     SetCapturing(true);
     return Step::Start;
 }

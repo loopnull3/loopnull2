@@ -54,6 +54,24 @@ TEST_CASE("Frame dump schedule records sampled textures for an armed sampled cap
     REQUIRE(schedule.Tick(0.0) == Step::None);
 }
 
+TEST_CASE("Frame dump schedule keeps a capture of two frames open across a present",
+          "[frame_dump_schedule]") {
+    FrameDumpSchedule schedule;
+    REQUIRE(schedule.Arm(true, false, 0, 2));
+    REQUIRE(schedule.Tick(0.0) == Step::Start);
+    REQUIRE(schedule.Tick(0.0) == Step::None);
+    REQUIRE(schedule.Capturing());
+    REQUIRE(Vulkan::RecordingSampledTextures());
+    REQUIRE(schedule.Tick(0.0) == Step::Finish);
+    REQUIRE_FALSE(schedule.Capturing());
+    REQUIRE_FALSE(Vulkan::RecordingSampledTextures());
+
+    // The next capture is one frame again unless it asks for more.
+    REQUIRE(schedule.Arm(false, false, 1));
+    REQUIRE(schedule.Tick(0.0) == Step::Start);
+    REQUIRE(schedule.Tick(0.0) == Step::Finish);
+}
+
 TEST_CASE("Frame dump schedule records buffers independently of sampled textures",
           "[frame_dump_schedule]") {
     FrameDumpSchedule schedule;

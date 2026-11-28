@@ -39,6 +39,7 @@
 #include "video_core/renderer_vulkan/framebuffer_limits.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
+#include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -1325,6 +1326,34 @@ void UseBc3ForSwitch2OnSmallCards(const Device& device) {
                 memory >> 20);
     Settings::SetAstcRecompressionOverride(Settings::AstcRecompression::Bc3);
 }
+/// An image, for a line of a frame capture.
+std::string CaptureImage(const Image& image) {
+    u64 host{};
+    const VkImage handle = image.Handle();
+    std::memcpy(&host, &handle, (std::min)(sizeof(host), sizeof(handle)));
+    return fmt::format(
+        R"({{"gpu_addr":"{:#x}","width":{},"height":{},"samples":{},"layers":{},"format":{},"flags":{},"host":"{:#x}"}})",
+        image.gpu_addr, image.info.size.width, image.info.size.height, image.info.num_samples,
+        image.info.resources.layers, static_cast<u32>(image.info.format),
+        static_cast<u32>(image.flags), host);
+}
+
+/// The first of an event's regions, for a line of a frame capture.
+std::string CaptureRegion(const VideoCommon::ImageCopy& copy) {
+    return fmt::format(
+        R"({{"src":[{},{}],"dst":[{},{}],"extent":[{},{}],"src_layer":{},"dst_layer":{},"layers":{}}})",
+        copy.src_offset.x, copy.src_offset.y, copy.dst_offset.x, copy.dst_offset.y,
+        copy.extent.width, copy.extent.height, copy.src_subresource.base_layer,
+        copy.dst_subresource.base_layer, copy.src_subresource.num_layers);
+}
+
+std::string CaptureRegion(const VideoCommon::BufferImageCopy& copy) {
+    return fmt::format(R"({{"offset":[{},{}],"extent":[{},{}],"level":{},"layer":{},"layers":{}}})",
+                       copy.image_offset.x, copy.image_offset.y, copy.image_extent.width,
+                       copy.image_extent.height, copy.image_subresource.base_level,
+                       copy.image_subresource.base_layer, copy.image_subresource.num_layers);
+}
+
 } // Anonymous namespace
 
 TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& scheduler_,
@@ -2334,6 +2363,17 @@ void TextureCacheRuntime::BlitImage(Framebuffer* dst_framebuffer, ImageView& dst
     const VkImageAspectFlags aspect_mask = ImageAspectMask(src.format);
     const bool is_dst_msaa = dst.Samples() != VK_SAMPLE_COUNT_1_BIT;
     const bool is_src_msaa = src.Samples() != VK_SAMPLE_COUNT_1_BIT;
+    if (frame_dump != nullptr && frame_dump->Capturing() && dst.BackingImage() != nullptr &&
+        src.BackingImage() != nullptr) {
+        frame_dump->NoteEvent(
+            "blit",
+            fmt::format(
+                R"("dst":{},"src":{},"dst_region":[{},{},{},{}],"src_region":[{},{},{},{}],"filter":{},"operation":{})",
+                CaptureImage(*dst.BackingImage()), CaptureImage(*src.BackingImage()),
+                dst_region.start.x, dst_region.start.y, dst_region.end.x, dst_region.end.y,
+                src_region.start.x, src_region.start.y, src_region.end.x, src_region.end.y,
+                static_cast<u32>(filter), static_cast<u32>(operation)));
+    }
     if (aspect_mask != ImageAspectMask(dst.format)) {
         UNIMPLEMENTED_MSG("Incompatible blit from format {} to {}", src.format, dst.format);
         return;
@@ -2620,6 +2660,12 @@ void TextureCacheRuntime::CopyImage(Image& dst, Image& src,
     if (copies.empty())
         return;
 
+    if (frame_dump != nullptr && frame_dump->Capturing()) {
+        frame_dump->NoteEvent("copy",
+                              fmt::format(R"("dst":{},"src":{},"regions":{},"first":{})",
+                                          CaptureImage(dst), CaptureImage(src), copies.size(),
+                                          CaptureRegion(copies.front())));
+    }
     if (ENABLE_MSAA_RESOLVE_CONSUME) {
         InvalidateResolveShadow(dst.Handle());
     }
@@ -2742,6 +2788,15 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
 
     const bool msaa_to_non_msaa = src.info.num_samples > 1 && dst.info.num_samples == 1;
     const u32 num_samples = msaa_to_non_msaa ? src.info.num_samples : dst.info.num_samples;
+    const auto note_capture = [&](std::string_view path) {
+        if (frame_dump != nullptr && frame_dump->Capturing()) {
+            frame_dump->NoteEvent(
+                "copy_samples",
+                fmt::format(R"("dst":{},"src":{},"regions":{},"first":{},"path":"{}")",
+                            CaptureImage(dst), CaptureImage(src), copies.size(),
+                            CaptureRegion(copies.front()), path));
+        }
+    };
     if (ENABLE_MSAA_RESOLVE_CONSUME && !msaa_to_non_msaa) {
         // The copy writes the samples and resolves nothing.
         InvalidateResolveShadow(dst.Handle());
@@ -2769,6 +2824,7 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
                 attachment_read_write = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             }
+            note_capture("resolve shadow copied");
             const VkImage shadow_image = *shadow->image;
             const VkImage dst_image = dst.Handle();
             const VkImageCopy region{
@@ -2862,9 +2918,11 @@ void TextureCacheRuntime::CopyImageMSAA(Image& dst, Image& src,
             return;
         }
         if (ExpandResolveShadow(dst, src, copy, num_samples)) {
+            note_capture("resolve shadow repeated per sample");
             return;
         }
     }
+    note_capture("sample by sample");
     const VkImageAspectFlags dst_aspect_mask = dst.AspectMask();
     if ((dst_aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0) {
         const bool copies_stencil = (dst_aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 &&
@@ -3313,6 +3371,13 @@ void Image::UploadMemory(VkBuffer buffer, VkDeviceSize offset,
         if (copies.empty())
             return;
     }
+    if (runtime != nullptr && runtime->frame_dump != nullptr &&
+        runtime->frame_dump->Capturing() && !copies.empty()) {
+        runtime->frame_dump->NoteEvent("upload",
+                                       fmt::format(R"("image":{},"regions":{},"first":{})",
+                                                   CaptureImage(*this), copies.size(),
+                                                   CaptureRegion(copies.front())));
+    }
 
     // TODO: Move this to another API
     if (ENABLE_MSAA_RESOLVE_CONSUME && runtime != nullptr) {
@@ -3436,6 +3501,13 @@ void Image::DownloadMemory(std::span<VkBuffer> buffers_span, std::span<size_t> o
         copies = host_copies;
         if (copies.empty())
             return;
+    }
+    if (runtime != nullptr && runtime->frame_dump != nullptr &&
+        runtime->frame_dump->Capturing() && !copies.empty()) {
+        runtime->frame_dump->NoteEvent("download",
+                                       fmt::format(R"("image":{},"regions":{},"first":{})",
+                                                   CaptureImage(*this), copies.size(),
+                                                   CaptureRegion(copies.front())));
     }
 
     if (!original_image && False(flags & ImageFlagBits::Rescaled)) {

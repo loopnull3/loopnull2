@@ -462,6 +462,7 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
     g_counted_draws.store(0, std::memory_order_relaxed);
     g_counted_draws_skipped.store(0, std::memory_order_relaxed);
     g_counted_clears.store(0, std::memory_order_relaxed);
+    texture_cache_runtime.frame_dump = &frame_dump;
     scheduler.SetQueryCache(query_cache);
     buffer_cache.SetPendingCpuWrites(
         [this](const std::function<void(DAddr, size_t)>& callback) {
@@ -1984,6 +1985,19 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     const Framebuffer* const framebuffer = texture_cache.GetFramebuffer();
     if (frame_dump.Capturing()) {
         FrameDumpPass(framebuffer);
+        const auto& scissor = regs.scissor_test[0];
+        frame_dump.NoteEvent(
+            "clear",
+            fmt::format(
+                R"("rt":"{:#x}","rt_width":{},"rt_height":{},"zeta":"{:#x}","surface":{:#x},"color":[{},{},{},{}],"depth":{},"stencil":{},"use_scissor":{},"scissor":[{},{},{},{},{}],"layer":{},"layers":{})",
+                regs.rt[regs.clear_surface.RT].Address(), regs.rt[regs.clear_surface.RT].width,
+                regs.rt[regs.clear_surface.RT].height,
+                regs.zeta_enable != 0 ? regs.zeta.Address() : 0, regs.clear_surface.raw,
+                regs.clear_color[0], regs.clear_color[1], regs.clear_color[2],
+                regs.clear_color[3], regs.clear_depth, regs.clear_stencil,
+                regs.clear_control.use_scissor != 0, scissor.enable != 0, scissor.min_x.Value(),
+                scissor.max_x.Value(), scissor.min_y.Value(), scissor.max_y.Value(),
+                regs.clear_surface.layer.Value(), layer_count));
     }
     const VkExtent2D render_area = framebuffer->RenderArea();
     const u32 base_array_layer = regs.clear_surface.layer;
@@ -3283,10 +3297,15 @@ void RasterizerVulkan::TickFrame() {
     // Debug knob 1 (Settings, Debug, "Debug knobs" = 1): two frames of the session are captured
     // with the textures they sample, and every line of the capture's manifest is repeated in the
     // log, so a report of a wrong picture needs only the log. For a device with no debug server.
-    if ((frames == 300 || frames == 1500) && Settings::GetDebugKnobAt(0)) {
+    // After those, one every 600 frames up to frame 9600, into one folder that keeps the newest:
+    // a screen the player has to walk to (Minecraft's Play screen) is caught by staying on it.
+    const bool late_capture = frames >= 2400 && frames <= 9600 && frames % 600 == 0;
+    if ((frames == 300 || frames == 1500 || late_capture) && Settings::GetDebugKnobAt(0)) {
         const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) /
-                         fmt::format("frame-{}", frames);
-        if (!frame_dump.ArmLogged(dir)) {
+                         (late_capture ? std::string{"frame-late"} : fmt::format("frame-{}", frames));
+        if (frame_dump.ArmLogged(dir)) {
+            LOG_INFO(Render_Vulkan, "Frame {}: capturing the next two frames", frames);
+        } else {
             LOG_WARNING(Render_Vulkan, "Frame {}: no capture, another one is running", frames);
         }
     }

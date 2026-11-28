@@ -43,6 +43,7 @@ using VideoCore::Surface::PixelFormat;
 class BlitImageHelper;
 class DescriptorPool;
 class Device;
+class FrameDump;
 class Image;
 class ImageView;
 class Framebuffer;
@@ -263,6 +264,9 @@ public:
     bool IsFormatScalable(VideoCore::Surface::PixelFormat format);
 
     VkFormat GetSupportedFormat(VkFormat requested_format, VkFormatFeatureFlags required_features) const;
+
+    /// The frame capture: told of copies, blits, uploads and downloads while it runs.
+    FrameDump* frame_dump{};
 
     const Device& device;
     Scheduler& scheduler;
