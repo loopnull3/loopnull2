@@ -77,16 +77,19 @@ Loader::ResultStatus NCA::Open(const Core::Crypto::KeyManager& keys, const NCA* 
         return Loader::ResultStatus::ErrorBadNCAHeader;
     }
 
+    // A decrypted NCA needs no keys.
+    const bool decrypted = reader->GetMagic() == NcaHeader::MagicDecrypted;
+
     // Ensure we have the proper key area keys to continue.
     const u8 master_key_id = MasterKeyIdForKeyGeneration(reader->GetKeyGeneration());
-    if (!keys.HasKey(Core::Crypto::S128KeyType::KeyArea, master_key_id, reader->GetKeyIndex())) {
+    if (!decrypted && !keys.HasKey(Core::Crypto::S128KeyType::KeyArea, master_key_id, reader->GetKeyIndex())) {
         LOG_ERROR(Loader, "Cannot decrypt {}: keys for gen 0x{:02X}+ required.", file->GetName(), reader->GetKeyGeneration());
         return Loader::ResultStatus::ErrorMissingKeyAreaKey;
     }
 
     RightsId rights_id{};
     reader->GetRightsId(rights_id.data(), rights_id.size());
-    if (rights_id != RightsId{}) {
+    if (!decrypted && rights_id != RightsId{}) {
         // External decryption key required; provide it here.
         u128 rights_id_u128;
         std::memcpy(rights_id_u128.data(), rights_id.data(), sizeof(rights_id));
@@ -126,7 +129,10 @@ Loader::ResultStatus NCA::Open(const Core::Crypto::KeyManager& keys, const NCA* 
         section.index = i;
         section.partition = header_reader.GetFsType() == NcaFsHeader::FsType::PartitionFs;
 
-        if (header_reader.GetEncryptionType() == NcaFsHeader::EncryptionType::AesCtrEx) {
+        // Decrypted updates keep their patch tables with encryption type None.
+        const auto& patch_info = header_reader.GetPatchInfo();
+        if (header_reader.GetEncryptionType() == NcaFsHeader::EncryptionType::AesCtrEx ||
+            (decrypted && patch_info.HasIndirectTable() && patch_info.HasAesCtrExTable())) {
             is_update = true;
         }
     }

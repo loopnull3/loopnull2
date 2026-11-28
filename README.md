@@ -287,6 +287,10 @@ Switch 2's keys. LoopNative keeps the two side by side, from your own consoles:
   The files are the `.nca` entries of the archive's root or of a folder inside it (other entries, a
   readme say, are left out, and one kept as a folder of parts is taken as it is); an archive with
   none says what it holds instead.
+- **Decrypted firmware files** open without keys (Orchid's reader for them, MythosOfs/Orchid
+  6b1bf78): an NCA stored with a plain header under the magic `DNCA` and plain sections, as game
+  converters write them. The failure dialog also shows what the first file holds where a header's
+  magic is, as stored, which tells such a file from an encrypted one.
 - **QLaunch** boots the Switch 2's home menu when its firmware is installed, else the Switch's.
   With both, the applet list has an entry for each.
 - The home menu's own applets are looked for under `04`, a Switch 2 program is told its own

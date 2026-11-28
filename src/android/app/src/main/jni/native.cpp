@@ -7,6 +7,8 @@
 #define VMA_IMPLEMENTATION
 #include "video_core/vulkan_common/vma.h"
 
+#include <algorithm>
+#include <array>
 #include <codecvt>
 #include <cstdio>
 #include <cstdlib>
@@ -1754,6 +1756,19 @@ jint Java_org_yuzu_yuzu_1emu_NativeLibrary_firmwareFilesPlatform(JNIEnv* env, jc
         g_firmware_files_problem +=
             fmt::format("\n{} ({} bytes): {}", first_file->GetName(), first_file->GetSize(),
                         Loader::GetResultStatusString(first_status));
+        // What the file holds where a header's magic is, as stored: a file that is not encrypted
+        // has its magic there (NCA3, or DNCA for a decrypted one), an encrypted one has noise.
+        std::array<u8, 4> stored{};
+        if (first_file->Read(stored.data(), stored.size(), 0x200) == stored.size()) {
+            const bool text = std::ranges::all_of(
+                stored, [](u8 byte) { return byte >= 0x20 && byte < 0x7f; });
+            const std::string as_stored = fmt::format(
+                "{:02x}{:02x}{:02x}{:02x}{}", stored[0], stored[1], stored[2], stored[3],
+                text ? fmt::format(" (\"{}\")", std::string(stored.begin(), stored.end()))
+                     : std::string{});
+            LOG_ERROR(Frontend, "Firmware files: ... and as {} as it is stored", as_stored);
+            g_firmware_files_problem += fmt::format("\nas stored: {}", as_stored);
+        }
         for (size_t index = 0; index < reads.size(); ++index) {
             g_firmware_files_problem += fmt::format(
                 "\nkey file {}: {}{}", index + 1, reads[index].text,
