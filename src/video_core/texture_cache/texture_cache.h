@@ -2178,9 +2178,11 @@ ImageId TextureCache<P>::DmaImageId(const Tegra::DMA::ImageOperand& operand, boo
         return NULL_IMAGE_ID;
     }
     auto& image = slot_images[dst_id];
-    NoteLargeImage(image, is_upload ? "a DMA copy's destination" : "a DMA copy's source",
-                   fmt::format("{}x{} at {:#x}", dst_info.size.width, dst_info.size.height,
-                               operand.address));
+    if (Settings::GetDebugKnobAt(0)) {
+        NoteLargeImage(image, is_upload ? "a DMA copy's destination" : "a DMA copy's source",
+                       fmt::format("{}x{} at {:#x}", dst_info.size.width, dst_info.size.height,
+                                   operand.address));
+    }
     if (is_upload && Settings::GetDebugKnobAt(0) && image.info.type == ImageType::e2D &&
         image.info.resources.layers >= 2 && image.info.resources.layers <= 16) {
         // Debug knob 1: where a copy into a cube or a small array goes.
@@ -3402,12 +3404,14 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
     }
     Image& new_image = slot_images[new_image_id];
-    NoteLargeImage(new_image, "made",
-                   fmt::format("{} overlaps joined, {} aliases, {} bad overlaps",
-                               join_overlap_ids.size(),
-                               join_left_aliased_ids.size() + join_right_aliased_ids.size() +
-                                   join_samples_aliased_ids.size(),
-                               join_bad_overlap_ids.size()));
+    if (Settings::GetDebugKnobAt(0)) {
+        NoteLargeImage(new_image, "made",
+                       fmt::format("{} overlaps joined, {} aliases, {} bad overlaps",
+                                   join_overlap_ids.size(),
+                                   join_left_aliased_ids.size() + join_right_aliased_ids.size() +
+                                       join_samples_aliased_ids.size(),
+                                   join_bad_overlap_ids.size()));
+    }
 
     new_image.allocation_tick = frame_tick;
     {
@@ -3913,8 +3917,11 @@ ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAdd
                      image.info.size.height, image.info.resources.layers, image.gpu_addr);
         }
     }
-    NoteLargeImage(image, clearing_render_targets ? "a clear's target" : "a draw's target",
-                   fmt::format("as {}x{} at {:#x}", info.size.width, info.size.height, gpu_addr));
+    if (Settings::GetDebugKnobAt(0)) {
+        NoteLargeImage(image, clearing_render_targets ? "a clear's target" : "a draw's target",
+                       fmt::format("as {}x{} at {:#x}", info.size.width, info.size.height,
+                                   gpu_addr));
+    }
     return FindOrEmplaceImageView(image_id, ImageViewInfo(view_type, info.format, range));
 }
 
@@ -4749,10 +4756,12 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
             }
         }
     }
-    NoteLargeImage(dst, "copied into from an image over the same memory",
-                   fmt::format("the {}x{} one of {} samples at {:#x} (flags {:#x}), {} regions",
-                               src.info.size.width, src.info.size.height, src.info.num_samples,
-                               src.gpu_addr, static_cast<u32>(src.flags), copies.size()));
+    if (Settings::GetDebugKnobAt(0)) {
+        NoteLargeImage(dst, "copied into from an image over the same memory",
+                       fmt::format("the {}x{} one of {} samples at {:#x} (flags {:#x}), {} regions",
+                                   src.info.size.width, src.info.size.height, src.info.num_samples,
+                                   src.gpu_addr, static_cast<u32>(src.flags), copies.size()));
+    }
     if (dst.info.num_samples != src.info.num_samples) {
         // A samples alias (AddSamplesAlias): the extents count the destination's pixels.
         return runtime.CopyImageMSAA(dst, src, copies);
