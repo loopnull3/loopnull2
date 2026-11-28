@@ -253,8 +253,8 @@ Result IApplicationFunctions::GetDisplayVersion(Out<DisplayVersion> out_display_
 
 Result IApplicationFunctions::ExtendSaveData(Out<u64> out_required_size, FileSys::SaveDataType type,
                                              u128 user_id, u64 normal_size, u64 journal_size) {
-    LOG_DEBUG(Service_AM, "called with type={} user_id={:016X}{:016X} normal={:#x} journal={:#x}",
-              static_cast<u8>(type), user_id[1], user_id[0], normal_size, journal_size);
+    LOG_INFO(Service_AM, "called with type={} normal={:#x} journal={:#x}", static_cast<u8>(type),
+             normal_size, journal_size);
 
     system.GetFileSystemController().OpenSaveDataController()->WriteSaveDataSize(
         type, m_applet->program_id, user_id, {normal_size, journal_size});
@@ -276,6 +276,8 @@ Result IApplicationFunctions::GetSaveDataSize(Out<u64> out_normal_size, Out<u64>
 
     *out_normal_size = size.normal;
     *out_journal_size = size.journal;
+    LOG_INFO(Service_AM, "Save data of type {}: normal={:#x} journal={:#x}", static_cast<u8>(type),
+             size.normal, size.journal);
     R_SUCCEED();
 }
 
@@ -293,10 +295,26 @@ Result IApplicationFunctions::CreateCacheStorage(Out<u32> out_target_media,
 
 Result IApplicationFunctions::GetSaveDataSizeMax(Out<u64> out_max_normal_size,
                                                  Out<u64> out_max_journal_size) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // How far the application's account save data may be extended: its control data says. The
+    // answer used to be 256 MiB less a byte for every title, under what a title that grows its
+    // save (Minecraft's worlds) is allowed.
+    constexpr u64 Fallback = 0xFFFFFFF;
+    u64 max_normal = 0;
+    u64 max_journal = 0;
+    std::vector<u8> nacp;
+    if (system.GetARPManager().GetControlProperty(&nacp, m_applet->program_id).IsSuccess() &&
+        nacp.size() >= sizeof(FileSys::RawNACP)) {
+        auto raw_nacp = std::make_unique<FileSys::RawNACP>();
+        std::memcpy(raw_nacp.get(), nacp.data(), sizeof(*raw_nacp));
+        max_normal = raw_nacp->user_account_save_data_max_size;
+        max_journal = raw_nacp->user_account_save_data_max_journal_size;
+    }
+    LOG_INFO(Service_AM, "called, the control data's maximum: normal={:#x} journal={:#x}{}",
+             max_normal, max_journal,
+             max_normal == 0 || max_journal == 0 ? " (none set: 0xFFFFFFF answered)" : "");
 
-    *out_max_normal_size = 0xFFFFFFF;
-    *out_max_journal_size = 0xFFFFFFF;
+    *out_max_normal_size = max_normal != 0 ? max_normal : Fallback;
+    *out_max_journal_size = max_journal != 0 ? max_journal : Fallback;
 
     R_SUCCEED();
 }
@@ -313,6 +331,8 @@ Result IApplicationFunctions::GetCacheStorageMax(Out<u32> out_cache_storage_inde
 
     *out_cache_storage_index_max = static_cast<u32>(raw_nacp->cache_storage_max_index);
     *out_max_journal_size = static_cast<u64>(raw_nacp->cache_storage_data_and_journal_max_size);
+    LOG_INFO(Service_AM, "Cache storage: index up to {}, data and journal up to {:#x}",
+             *out_cache_storage_index_max, *out_max_journal_size);
 
     R_SUCCEED();
 }

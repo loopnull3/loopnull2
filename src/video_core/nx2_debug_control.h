@@ -65,6 +65,11 @@ void CancelCapture(u64 id);
 [[nodiscard]] std::optional<CaptureResult> WaitCapture(u64 id, std::chrono::milliseconds timeout);
 /// Rasterizer thread.
 [[nodiscard]] std::optional<CaptureRequest> TakeCapture();
+
+/// A device without a debug server asks for a capture whose manifest goes to the log (debug knob
+/// 1): the frontend when the player resumes from a pause, the rasterizer at the next frame end.
+void RequestLoggedCapture() noexcept;
+[[nodiscard]] bool TakeLoggedCapture() noexcept;
 /// Frame dump writer thread, once the manifest summary is written (or the capture failed).
 void FinishCapture(u64 id, CaptureResult result);
 

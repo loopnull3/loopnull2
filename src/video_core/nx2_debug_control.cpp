@@ -68,6 +68,18 @@ bool HasRequests() noexcept {
     return pending.load(std::memory_order_relaxed);
 }
 
+namespace {
+std::atomic<bool> logged_capture_asked{};
+} // Anonymous namespace
+
+void RequestLoggedCapture() noexcept {
+    logged_capture_asked.store(true, std::memory_order_relaxed);
+}
+
+bool TakeLoggedCapture() noexcept {
+    return logged_capture_asked.exchange(false, std::memory_order_relaxed);
+}
+
 void RequestCapture(CaptureRequest request) {
     std::scoped_lock lock{state.mutex};
     state.captures.push_back(std::move(request));

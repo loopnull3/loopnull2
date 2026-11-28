@@ -339,7 +339,8 @@ minute. Frames 300 and 1500 of the session are captured, then one every ten seco
 minutes (stay on a screen for twenty seconds to have it captured), and the log gets a
 `Frame dump:` line for every pass, every texture a pass samples and the image shown, with each
 one's size, format and lowest, highest and mean values, a map of where a large picture is
-black, and a line for each clear, copy and upload. A cube or a small array is read layer by layer, and for
+black, and a line for each clear, copy and upload. To capture a picture as you see it wrong,
+pause the emulation on it and resume: the two frames after a resume are captured too. A cube or a small array is read layer by layer, and for
 those of 2 to 16 layers the log also says what guest memory held for each layer at every upload,
 which images were found where one was made, and where DMA copies into one went. Set it back to
 0 afterwards: a capture stalls the game for a moment.

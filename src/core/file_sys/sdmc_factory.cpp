@@ -62,10 +62,12 @@ u64 SDMCFactory::GetSDMCFreeSpace() const {
 }
 
 u64 SDMCFactory::GetSDMCTotalSpace() const {
-    // Resize the SD space automatically, always leaving around 4GiB last from next chunk block
+    // Resize the SD space automatically, always leaving 4 GiB or more: the card ends at the
+    // 4 GiB boundary after that. (One block past the content's own left as little as nothing
+    // free when the content came close to a boundary.)
     using namespace Common::Literals;
     auto const bytes_per_sector = 512;
-    auto const size_block = (sd_dir->GetSize() + 4_GiB) / 4_GiB;
+    auto const size_block = (sd_dir->GetSize() + 4_GiB + 4_GiB - 1) / 4_GiB;
     return Common::AlignUp(size_block * 4_GiB, bytes_per_sector);
 }
 

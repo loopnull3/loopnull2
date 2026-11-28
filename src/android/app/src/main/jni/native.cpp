@@ -98,6 +98,7 @@ extern "C" {
 #include "input_common/drivers/virtual_amiibo.h"
 #include "jni/native.h"
 #include "video_core/frame_gen/lossless_dll.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/capture.h"
@@ -514,6 +515,12 @@ void EmulationSession::UnPauseEmulation() {
     std::scoped_lock lock(m_mutex);
     m_system.Run();
     m_is_paused = false;
+    // Debug knob 1: resuming from a pause captures the frames that follow, so a picture can be
+    // caught as it is seen wrong (pause on that screen, then resume).
+    if (Settings::GetDebugKnobAt(0)) {
+        VideoCore::Nx2Debug::RequestLoggedCapture();
+        LOG_INFO(Frontend, "Resumed with debug knob 1: the next two frames are captured");
+    }
 }
 
 void EmulationSession::HaltEmulation() {

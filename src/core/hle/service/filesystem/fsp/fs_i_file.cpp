@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+
+#include "common/logging.h"
 #include "core/file_sys/errors.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/fsp/fs_i_file.h"
@@ -46,7 +49,15 @@ Result IFile::Write(
     LOG_DEBUG(Service_FS, "called, option={}, offset={:#x}, length={}", option.value, offset,
               size);
 
-    R_RETURN(backend->Write(offset, buffer.data(), size, option));
+    const Result result = backend->Write(offset, buffer.data(), size, option);
+    if (result.IsError()) {
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 24) {
+            LOG_WARNING(Service_FS, "Write of {} bytes at {:#x} failed: {:#x}", size, offset,
+                        result.GetInnerValue());
+        }
+    }
+    R_RETURN(result);
 }
 
 Result IFile::Flush() {
@@ -58,7 +69,15 @@ Result IFile::Flush() {
 Result IFile::SetSize(s64 size) {
     LOG_DEBUG(Service_FS, "called, size={}", size);
 
-    R_RETURN(backend->SetSize(size));
+    const Result result = backend->SetSize(size);
+    if (result.IsError()) {
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 24) {
+            LOG_WARNING(Service_FS, "Resize of a file to {} bytes failed: {:#x}", size,
+                        result.GetInnerValue());
+        }
+    }
+    R_RETURN(result);
 }
 
 Result IFile::GetSize(Out<s64> out_size) {

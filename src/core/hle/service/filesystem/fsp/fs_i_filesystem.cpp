@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <string_view>
+
+#include "common/logging.h"
 #include "common/string_util.h"
 #include "core/file_sys/fssrv/fssrv_sf_path.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -12,6 +16,33 @@
 #include "core/hle/service/filesystem/fsp/fs_i_filesystem.h"
 
 namespace Service::FileSystem {
+
+namespace {
+
+// A change to a file system that failed: a game may take one for "no space left" (Minecraft said
+// so when it made a world), and the calls themselves are only in a debug log.
+Result NoteFailure(const char* what, std::string_view path, Result result) {
+    static std::atomic<u32> logged{};
+    if (result.IsError() && logged.fetch_add(1, std::memory_order_relaxed) < 48) {
+        LOG_WARNING(Service_FS, "{} of '{}' failed: {:#x} (module {}, description {})", what, path,
+                    result.GetInnerValue(), static_cast<u32>(result.GetModule()),
+                    result.GetDescription());
+    }
+    return result;
+}
+
+// The space a file system reports: the first answers, and every one under 1 GiB.
+void NoteSpace(const char* what, u64 size) {
+    static std::atomic<u32> logged{};
+    static std::atomic<u32> logged_low{};
+    constexpr u64 Low = u64{1} << 30;
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 12 ||
+        (size < Low && logged_low.fetch_add(1, std::memory_order_relaxed) < 24)) {
+        LOG_INFO(Service_FS, "{}: {} bytes ({} MiB)", what, size, size >> 20);
+    }
+}
+
+} // Anonymous namespace
 
 IFileSystem::IFileSystem(Core::System& system_, FileSys::VirtualDir dir_, SizeGetter size_getter_)
     : ServiceFramework{system_, "IFileSystem"}, backend{std::make_unique<FileSys::Fsa::IFileSystem>(
@@ -43,7 +74,8 @@ Result IFileSystem::CreateFile(const InLargeData<FileSys::Sf::Path, BufferAttr_H
                                s32 option, s64 size) {
     LOG_DEBUG(Service_FS, "called. file={}, option={:#x}, size={:#08x}", path->str, option, size);
 
-    R_RETURN(backend->CreateFile(FileSys::Path(path->str), size));
+    R_RETURN(NoteFailure("CreateFile", path->str,
+                         backend->CreateFile(FileSys::Path(path->str), size)));
 }
 
 Result IFileSystem::DeleteFile(const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path) {
@@ -56,7 +88,8 @@ Result IFileSystem::CreateDirectory(
     const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path) {
     LOG_DEBUG(Service_FS, "called. directory={}", path->str);
 
-    R_RETURN(backend->CreateDirectory(FileSys::Path(path->str)));
+    R_RETURN(NoteFailure("CreateDirectory", path->str,
+                         backend->CreateDirectory(FileSys::Path(path->str))));
 }
 
 Result IFileSystem::DeleteDirectory(
@@ -85,7 +118,9 @@ Result IFileSystem::RenameFile(
     const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> new_path) {
     LOG_DEBUG(Service_FS, "called. file '{}' to file '{}'", old_path->str, new_path->str);
 
-    R_RETURN(backend->RenameFile(FileSys::Path(old_path->str), FileSys::Path(new_path->str)));
+    R_RETURN(NoteFailure(
+        "RenameFile", old_path->str,
+        backend->RenameFile(FileSys::Path(old_path->str), FileSys::Path(new_path->str))));
 }
 
 Result IFileSystem::RenameDirectory(
@@ -93,7 +128,9 @@ Result IFileSystem::RenameDirectory(
     const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> new_path) {
     LOG_DEBUG(Service_FS, "called. directory '{}' to directory '{}'", old_path->str, new_path->str);
 
-    R_RETURN(backend->RenameDirectory(FileSys::Path(old_path->str), FileSys::Path(new_path->str)));
+    R_RETURN(NoteFailure(
+        "RenameDirectory", old_path->str,
+        backend->RenameDirectory(FileSys::Path(old_path->str), FileSys::Path(new_path->str))));
 }
 
 Result IFileSystem::OpenFile(OutInterface<IFile> out_interface,
@@ -145,6 +182,7 @@ Result IFileSystem::GetFreeSpaceSize(
     LOG_DEBUG(Service_FS, "called");
 
     *out_size = size_getter.get_free_size();
+    NoteSpace("Free space of a file system", static_cast<u64>(*out_size));
     R_SUCCEED();
 }
 
@@ -153,6 +191,7 @@ Result IFileSystem::GetTotalSpaceSize(
     LOG_DEBUG(Service_FS, "called");
 
     *out_size = size_getter.get_total_size();
+    NoteSpace("Total space of a file system", static_cast<u64>(*out_size));
     R_SUCCEED();
 }
 

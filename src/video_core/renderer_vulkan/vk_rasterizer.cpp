@@ -3300,9 +3300,15 @@ void RasterizerVulkan::TickFrame() {
     // After those, one every 600 frames up to frame 9600, into one folder that keeps the newest:
     // a screen the player has to walk to (Minecraft's Play screen) is caught by staying on it.
     const bool late_capture = frames >= 2400 && frames <= 9600 && frames % 600 == 0;
-    if ((frames == 300 || frames == 1500 || late_capture) && Settings::GetDebugKnobAt(0)) {
+    // And one when the player resumes from a pause, to catch a picture as it is seen wrong.
+    const bool asked_capture =
+        Settings::GetDebugKnobAt(0) && VideoCore::Nx2Debug::TakeLoggedCapture();
+    if ((frames == 300 || frames == 1500 || late_capture || asked_capture) &&
+        Settings::GetDebugKnobAt(0)) {
         const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) /
-                         (late_capture ? std::string{"frame-late"} : fmt::format("frame-{}", frames));
+                         (asked_capture  ? std::string{"frame-asked"}
+                          : late_capture ? std::string{"frame-late"}
+                                         : fmt::format("frame-{}", frames));
         if (frame_dump.ArmLogged(dir)) {
             LOG_INFO(Render_Vulkan, "Frame {}: capturing the next two frames", frames);
         } else {
