@@ -243,6 +243,23 @@ Controller ports now follow the controllers themselves rather than the order the
 so the pair keeps its mapping whichever Joy-Con reconnects first. If you used several controllers
 before, auto-map them once more.
 
+## A second player
+
+A controller that is in no player's mapping becomes the next free player when a button is
+pressed on it during a game, with its own default mapping; a toast names the player. This is
+not saved: Settings › Controls gives a player its controller for good. One Joy-Con of a pair is
+not made a player on its own. A controller that a saved mapping names keeps the port the
+mapping names, whichever other controllers are connected.
+
+A game that adds a local player asks which user that player is (Minecraft does), and does not
+take a user who is already playing. Nobody is asked on Android: the current user is given, or,
+when the game excludes that one, the first other user it allows. So a second local player
+needs a second user: create one in Profile Manager before the game.
+
+The log says which controllers are connected, which player each one drives and how, each
+player's connection and controller type, the controller types and players the game takes, and
+what the user selection was asked and gave.
+
 ## QLaunch and a Switch 2 firmware
 
 QLaunch boots the home menu of an installed firmware. Hokkaido takes a Switch firmware, whose

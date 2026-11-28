@@ -159,6 +159,14 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                     params.get("display", getString(R.string.unknown))
                 )
                 NativeConfig.saveGlobalConfig()
+                Log.info(
+                    "[EmulationActivity] No player had a mapping: player 1 gets the default " +
+                        "mapping of ${params.get("display", "")} (port 0), saved"
+                )
+            } else {
+                Log.info(
+                    "[EmulationActivity] No player has a mapping and no controller is at port 0"
+                )
             }
         }
 
@@ -826,7 +834,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         emulationViewModel.setIsEmulationStopping(false)
         emulationViewModel.setEmulationStopped(false)
         NativeLibrary.playTimeManagerStart()
-
+        NativeInput.logControllers("emulation started")
     }
 
     fun onEmulationStopped(status: Int) {

@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
+#include <string_view>
 
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -27,6 +29,42 @@
 #include "hid_core/resources/shared_memory_format.h"
 
 namespace Service::HID {
+
+namespace {
+
+// Names for the log
+std::string NpadName(Core::HID::NpadIdType npad_id) {
+    switch (npad_id) {
+    case Core::HID::NpadIdType::Handheld:
+        return "Handheld";
+    case Core::HID::NpadIdType::Other:
+        return "Other";
+    default:
+        return IsNpadIdValid(npad_id) ? fmt::format("Player {}", NpadIdTypeToIndex(npad_id) + 1)
+                                      : fmt::format("npad {:#x}", static_cast<u32>(npad_id));
+    }
+}
+
+std::string StyleSetText(Core::HID::NpadStyleSet style_set) {
+    const Core::HID::NpadStyleTag styles{style_set};
+    std::string text;
+    const auto add = [&text](bool taken, std::string_view name) {
+        if (taken) {
+            text += text.empty() ? "" : ", ";
+            text += name;
+        }
+    };
+    add(styles.fullkey != 0, "Pro Controller");
+    add(styles.handheld != 0, "Handheld");
+    add(styles.joycon_dual != 0, "Dual Joycons");
+    add(styles.joycon_left != 0, "Left Joycon");
+    add(styles.joycon_right != 0, "Right Joycon");
+    add(styles.gamecube != 0, "GameCube Controller");
+    return fmt::format("{} (style set {:#x})", text.empty() ? "none of the common ones" : text,
+                       static_cast<u32>(style_set));
+}
+
+} // namespace
 
 NPad::NPad(Core::HID::HIDCore& hid_core_, KernelHelpers::ServiceContext& service_context_)
     : hid_core{hid_core_}
@@ -381,6 +419,10 @@ void NPad::InitNewlyAddedController(Kernel::KernelCore& kernel, u64 aruid, Core:
         break;
     }
 
+    if (!controller.is_connected) {
+        LOG_INFO(Input, "Controller shown to the game: {}, {}, process {}", NpadName(npad_id),
+                 StyleSetText(shared_memory->style_tag.raw), aruid);
+    }
     controller.is_connected = true;
     controller.device->Connect();
     controller.device->SetLedPattern();
@@ -656,6 +698,10 @@ void NPad::OnUpdate(Kernel::KernelCore& kernel, const Core::Timing::CoreTiming& 
 
 Result NPad::SetSupportedNpadStyleSet(Kernel::KernelCore& kernel, u64 aruid, Core::HID::NpadStyleSet supported_style_set) {
     std::scoped_lock lock{mutex};
+    if (hid_core.GetSupportedStyleTag().raw != supported_style_set) {
+        LOG_INFO(Input, "The game takes these controller types: {}, process {}",
+                 StyleSetText(supported_style_set), aruid);
+    }
     hid_core.SetSupportedStyleTag({supported_style_set});
     const Result result = npad_resource.SetSupportedNpadStyleSet(aruid, supported_style_set);
     if (result.IsSuccess()) {
@@ -694,6 +740,18 @@ Result NPad::SetSupportedNpadIdType(Kernel::KernelCore& kernel, u64 aruid, std::
     std::scoped_lock lock{mutex};
     if (supported_npad_list.size() > MaxSupportedNpadIdTypes) {
         return ResultInvalidArraySize;
+    }
+
+    // Said when the list changes: which players the game takes
+    std::string players;
+    for (const auto npad_id : supported_npad_list) {
+        players += players.empty() ? "" : ", ";
+        players += NpadName(npad_id);
+    }
+    if (players != supported_players_logged) {
+        LOG_INFO(Input, "The game takes these players: {}, process {}",
+                 players.empty() ? "none" : players, aruid);
+        supported_players_logged = std::move(players);
     }
 
     Result result = npad_resource.SetSupportedNpadIdType(aruid, supported_npad_list);
@@ -862,6 +920,9 @@ Result NPad::DisconnectNpad(Kernel::KernelCore& kernel, u64 aruid, Core::HID::Np
     };
     shared_memory->applet_footer_type = AppletFooterUiType::None;
 
+    if (controller.is_connected) {
+        LOG_INFO(Input, "Controller taken from the game: {}, process {}", NpadName(npad_id), aruid);
+    }
     controller.is_dual_left_connected = true;
     controller.is_dual_right_connected = true;
     controller.is_connected = false;

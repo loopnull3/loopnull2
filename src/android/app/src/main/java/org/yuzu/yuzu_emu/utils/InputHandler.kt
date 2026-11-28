@@ -9,9 +9,12 @@ package org.yuzu.yuzu_emu.utils
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.widget.Toast
+import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.input.YuzuInputOverlayDevice
 import org.yuzu.yuzu_emu.features.input.YuzuPhysicalDevice
+import org.yuzu.yuzu_emu.features.settings.model.Settings
 
 object InputHandler {
     var androidControllers = mapOf<Int, YuzuPhysicalDevice>()
@@ -90,6 +93,21 @@ object InputHandler {
             controllerData = androidControllers[event.device.controllerNumber] ?: return false
         }
 
+        // A controller that no player's mapping names becomes the next free player
+        if (action == NativeInput.ButtonState.PRESSED && event.repeatCount == 0) {
+            val player = NativeInput.joinUnmappedController(
+                controllerData.getGUID(),
+                controllerData.getPort()
+            )
+            if (player >= 0) {
+                Toast.makeText(
+                    YuzuApplication.appContext,
+                    "${controllerData.getName()}: ${Settings.getPlayerString(player + 1)}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
         NativeInput.onGamePadButtonEvent(
             controllerData.getGUID(),
             controllerData.getPort(),
@@ -128,25 +146,31 @@ object InputHandler {
 
     fun getDevices(): Map<Int, YuzuPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, YuzuPhysicalDevice>()
-        var port = 0
         val inputSettings = NativeConfig.getInputSettings(true)
         // Ports follow the controllers themselves, not the order they connected in: mappings
         // name a controller by its port, and a pair of Joy-Cons (two controllers to Android)
-        // must keep theirs whichever of the two reconnects first.
-        InputDevice.getDeviceIds().toList()
+        // must keep theirs whichever of the two reconnects first. So a controller that a mapping
+        // names gets the port the mapping names, whichever other controllers are connected, and
+        // the others get a number of their own (NativeInput.resolvePorts).
+        val devices = InputDevice.getDeviceIds().toList()
             .mapNotNull { InputDevice.getDevice(it) }
             .filter { isPhysicalGameController(it) }
             .sortedWith(compareBy({ it.vendorId }, { it.productId }, { it.descriptor }))
-            .forEach { device ->
-                if (!gameControllerDeviceIds.contains(device.controllerNumber)) {
-                    gameControllerDeviceIds[device.controllerNumber] = YuzuPhysicalDevice(
-                        device,
-                        port,
-                        inputSettings[port].useSystemVibrator
-                    )
-                }
-                port++
+        val ports = NativeInput.resolvePorts(
+            devices.map { it.getGUID() }.toTypedArray(),
+            devices.map { it.descriptor }.toTypedArray(),
+            devices.map { it.name }.toTypedArray()
+        )
+        devices.forEachIndexed { index, device ->
+            if (!gameControllerDeviceIds.contains(device.controllerNumber)) {
+                val port = ports.getOrElse(index) { index }
+                gameControllerDeviceIds[device.controllerNumber] = YuzuPhysicalDevice(
+                    device,
+                    port,
+                    inputSettings.getOrNull(port)?.useSystemVibrator ?: false
+                )
             }
+        }
         return gameControllerDeviceIds
     }
 

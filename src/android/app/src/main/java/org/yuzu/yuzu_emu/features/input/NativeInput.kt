@@ -182,6 +182,38 @@ object NativeInput {
     external fun registerController(device: YuzuInputDevice)
 
     /**
+     * Gives each connected controller its port: the one a player's mapping names for it, else a
+     * number of its own that it keeps while the app runs. Writes the controllers and the players
+     * to the log when the list changed.
+     * @param guids GUID of each connected controller, in InputHandler's order.
+     * @param descriptors [InputDevice.getDescriptor] of each, which tells two of one model apart.
+     * @param names Name of each, for the log.
+     * @return The port of each controller.
+     */
+    external fun resolvePorts(
+        guids: Array<String>,
+        descriptors: Array<String>,
+        names: Array<String>
+    ): IntArray
+
+    /**
+     * To be called when a button is pressed on a controller while a game runs. A controller that
+     * no player's mapping names becomes the next free player with its default mapping, until the
+     * input devices are reloaded: nothing is saved.
+     * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
+     * @param port Port of the controller.
+     * @return Index of the player the controller became, or -1 when nothing changed.
+     */
+    external fun joinUnmappedController(guid: String, port: Int): Int
+
+    /**
+     * Writes the connected controllers, the player each one drives and each player's connection
+     * and controller type to the log.
+     * @param reason What happened, for the log line.
+     */
+    external fun logControllers(reason: String)
+
+    /**
      * Gets the names of input devices that have been registered with the input subsystem via [registerController]
      */
     external fun getInputDevices(): Array<String>

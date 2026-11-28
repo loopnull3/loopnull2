@@ -10,6 +10,7 @@
 #include <atomic>
 #include <mutex>
 #include <span>
+#include <string>
 
 #include "common/common_types.h"
 #include "hid_core/hid_types.h"
@@ -205,5 +206,7 @@ private:
 
     std::atomic<u64> press_state{};
     std::array<std::array<NpadControllerData, MaxSupportedNpadIdTypes>, AruidIndexMax> controller_data{};
+    /// The players of the last SetSupportedNpadIdType the log has a line for
+    std::string supported_players_logged;
 };
 } // namespace Service::HID

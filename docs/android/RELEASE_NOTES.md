@@ -31,6 +31,9 @@ the Galaxy S26 / S26+ with Exynos 2600 (Xclipse 960, 12 GB).
   controls from one controller and the right half from another, for a pair of Joy-Cons, which
   Android lists as two controllers. Controller ports no longer depend on the order the
   controllers connected in.
+- **A second player:** a controller in no mapping becomes the next free player at a button
+  press during a game, and a game's request for another local player's user is answered with
+  a user the game allows (create a second user in Profile Manager first).
 - Korean translation of everything LoopNative shows.
 
 ## LoopNative Pack (Banana Native v0.3.51, modified)
