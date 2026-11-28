@@ -95,6 +95,7 @@ public slots:
     void RefreshExternalContent();
     void UpdateIconSizes();
     void OnPopulate();
+    bool IsPopulating() const { return m_populating; }
 
 signals:
     void ReportCompatibilityRequested(u64 program_id);

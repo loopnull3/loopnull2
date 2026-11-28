@@ -388,7 +388,8 @@ const FileSys::VirtualFile& AppLoader_DeconstructedRomDirectory::LooseRomFS() {
 }
 
 FileType AppLoader_DeconstructedRomDirectory::IdentifyType(const FileSys::VirtualFile& dir_file) {
-    if (FileSys::IsDirectoryExeFS(dir_file->GetContainingDirectory())) {
+    const auto directory = dir_file->GetContainingDirectory();
+    if (directory && FileSys::IsDirectoryExeFS(directory)) {
         return FileType::DeconstructedRomDirectory;
     }
 
@@ -563,10 +564,12 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
 
     if (standalone) {
         // Without this, fsp-srv SetCurrentProcess fails with ResultTargetNotFound.
-        system.GetFileSystemController().RegisterProcess(
-            process.GetProcessId(), metadata.GetTitleID(),
-            std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
-                                                    system.GetFileSystemController()));
+        auto& fs = system.GetFileSystemController();
+        if (fs.RegisterProcess(process.GetProcessId(), metadata.GetTitleID(),
+                std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(), fs))
+                .IsError()) {
+            return {ResultStatus::ErrorNotInitialized, {}};
+        }
     }
 
     is_loaded = true;
@@ -589,6 +592,21 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadIcon(std::vector<u8>& out_
     }
 
     out_buffer = icon_data;
+    return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadProgramMetadata(FileSys::ProgramMetadata& out) {
+    const auto exefs = dir ? dir : (file ? file->GetContainingDirectory() : nullptr);
+    const auto npdm = exefs ? exefs->GetFile("main.npdm") : nullptr;
+    if (npdm == nullptr) {
+        return ResultStatus::ErrorMissingNPDM;
+    }
+
+    if (const auto result = metadata.Load(npdm); result != ResultStatus::Success) {
+        return result;
+    }
+
+    out = metadata;
     return ResultStatus::Success;
 }
 

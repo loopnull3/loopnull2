@@ -235,10 +235,12 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
         return result;
     }
 
-    system.GetFileSystemController().RegisterProcess(
-        process.GetProcessId(), base_title_id,
-        std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
-                                                system.GetFileSystemController()));
+    auto& fs = system.GetFileSystemController();
+    if (fs.RegisterProcess(process.GetProcessId(), base_title_id,
+            std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(), fs))
+            .IsError()) {
+        return {ResultStatus::ErrorNotInitialized, {}};
+    }
 
     is_loaded = true;
     return result;
@@ -290,6 +292,11 @@ ResultStatus AppLoader_NUP::ReadProgramIds(std::vector<u64>& out_program_ids) {
     }
     out_program_ids.push_back(base_title_id);
     return ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NUP::ReadProgramMetadata(FileSys::ProgramMetadata& out) {
+    return secondary_loader ? secondary_loader->ReadProgramMetadata(out)
+                            : ResultStatus::ErrorNotInitialized;
 }
 
 ResultStatus AppLoader_NUP::ReadIcon(std::vector<u8>& buffer) {

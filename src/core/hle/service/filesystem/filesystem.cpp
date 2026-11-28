@@ -337,6 +337,7 @@ Result FileSystemController::RegisterProcess(
     std::shared_ptr<FileSys::RomFSFactory>&& romfs_factory) {
     std::scoped_lock lk{registration_lock};
 
+    R_UNLESS(!registrations.contains(process_id), FileSys::ResultInvalidArgument);
     registrations.emplace(process_id, Registration{
                                           .program_id = program_id,
                                           .romfs_factory = std::move(romfs_factory),
@@ -345,6 +346,11 @@ Result FileSystemController::RegisterProcess(
 
     LOG_DEBUG(Service_FS, "Registered for process {}", process_id);
     return ResultSuccess;
+}
+
+void FileSystemController::UnregisterProcess(ProcessId process_id) {
+    std::scoped_lock lk{registration_lock};
+    registrations.erase(process_id);
 }
 
 Result FileSystemController::OpenProcess(

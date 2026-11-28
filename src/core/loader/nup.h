@@ -46,6 +46,7 @@ public:
     bool IsRomFSUpdatable() const override;
     ResultStatus ReadProgramId(u64& out_program_id) override;
     ResultStatus ReadProgramIds(std::vector<u64>& out_program_ids) override;
+    ResultStatus ReadProgramMetadata(FileSys::ProgramMetadata& out) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadTitle(std::string& title) override;
     ResultStatus ReadControlData(FileSys::NACP& control) override;

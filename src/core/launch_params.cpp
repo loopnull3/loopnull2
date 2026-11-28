@@ -3,6 +3,7 @@
 
 #include <regex>
 #include <cctype>
+#include <string_view>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -30,6 +31,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
         {"config", required_argument, 0, 'c'},
         {"fullscreen", no_argument, 0, 'f'},
         {"help", no_argument, 0, 'h'},
+        {"home-menu", no_argument, 0, 'Q'},
         {"game", required_argument, 0, 'g'},
         {"multiplayer", required_argument, 0, 'm'},
         {"program", optional_argument, 0, 'p'},
@@ -55,6 +57,11 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
     };
 
     while (optind < argc) {
+        if (std::string_view{argv[optind]} == "-qlaunch") {
+            p.launch_qlaunch = true;
+            ++optind;
+            continue;
+        }
         if (int arg = getopt_long(argc, argv, "d:c:fhg:m:p:u:vi:nsx", long_options, &option_index); arg != -1) {
             switch (arg) {
             case 'd':
@@ -66,6 +73,9 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
             case 'f':
                 p.fullscreen = true;
                 LOG_INFO(Frontend, "Starting in fullscreen mode...");
+                break;
+            case 'Q':
+                p.launch_qlaunch = true;
                 break;
             case 'h':
                 p.print_help = true;
@@ -172,11 +182,8 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             }
         } else {
-            // only kept due to shortcuts made by Qt frontend which use "-qlaunch"
             if (strcmp(argv[optind], "-hlaunch") == 0) {
                 p.launch_hlaunch = true;
-            } else if (strcmp(argv[optind], "-qlaunch") == 0) {
-                p.launch_qlaunch = true;
             } else if (strcmp(argv[optind], "-setup") == 0) {
                 p.launch_setup = true;
             } else {
@@ -235,6 +242,7 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
             "-f, --fullscreen      Start in fullscreen mode\n"
             "-g, --game            File path of the game to load\n"
             "-h, --help            Display this help and exit\n"
+            "--home-menu           Start the firmware Home Menu (Qt)\n"
             "-m, --multiplayer=nick:password@address:port"
             " Nickname, password, address and port for multiplayer\n"
             "-p, --program         Pass following string as arguments to executable\n"

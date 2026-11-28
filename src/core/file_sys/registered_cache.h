@@ -21,6 +21,10 @@
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/nca_metadata.h"
 
+namespace Loader {
+class AppLoader;
+}
+
 namespace FileSys {
 class ExternalContentProvider;
 class CNMT;
@@ -258,6 +262,15 @@ public:
         std::optional<TitleType> title_type = {}, std::optional<ContentRecordType> record_type = {},
         std::optional<u64> title_id = {}) const;
 
+    struct ApplicationProgram {
+        VirtualFile file;
+        ContentProviderUnionSlot slot{};
+        bool loader_backed{};
+    };
+
+    std::vector<u64> ListApplicationIds() const;
+    ApplicationProgram GetApplicationProgram(u64 title_id) const;
+
     std::optional<ContentProviderUnionSlot> GetSlotForEntry(u64 title_id, ContentRecordType type) const;
 private:
     std::array<ContentProvider*, size_t(ContentProviderUnionSlot::Count)> providers;
@@ -273,6 +286,10 @@ public:
                              u32 version, const std::string& version_string, VirtualFile file);
     bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
                                  std::optional<u64> base_program_id = std::nullopt);
+    void RegisterApplicationFile(Loader::AppLoader& loader, VirtualFile file);
+    void RegisterApplicationNca(Loader::AppLoader& loader, VirtualFile file);
+    VirtualFile GetApplicationFile(u64 title_id) const;
+    std::vector<u64> ListApplicationFiles() const;
     void ClearAllEntries();
 
     void Refresh() override;
@@ -291,6 +308,7 @@ public:
 private:
     std::map<std::tuple<TitleType, ContentRecordType, u64>, VirtualFile> entries;
     std::vector<ExternalUpdateEntry> multi_version_entries;
+    std::map<u64, VirtualFile> application_files;
 };
 
 class ExternalContentProvider : public ContentProvider {
